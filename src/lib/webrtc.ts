@@ -1,17 +1,18 @@
-import { type Socket } from 'socket.io-client';
 import { audioEngine } from './audio';
+import { db } from '../firebase';
+import { collection, addDoc, onSnapshot, query, where, serverTimestamp, orderBy } from 'firebase/firestore';
 
 export class WebRTCManager {
-  socket: Socket;
+  userId: string;
   localStream: MediaStream | null = null;
-  peers: Map<string, RTCPeerConnection> = new Map(); // Keyed by userId now
-  userToSocket: Map<string, string> = new Map(); // userId -> socketId
+  peers: Map<string, RTCPeerConnection> = new Map();
   onUserTalking: (userId: string, isTalking: boolean, target: string) => void;
+  unsubSignals: (() => void) | null = null;
 
-  constructor(socket: Socket, onUserTalking: (userId: string, isTalking: boolean, target: string) => void) {
-    this.socket = socket;
+  constructor(userId: string, onUserTalking: (userId: string, isTalking: boolean, target: string) => void) {
+    this.userId = userId;
     this.onUserTalking = onUserTalking;
-    this.setupSocketListeners();
+    this.setupSignaling();
   }
 
   async initializeLocalStream() {
@@ -21,7 +22,6 @@ export class WebRTCManager {
         return false;
       }
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      // Start muted
       this.setLocalMicEnabled(false);
       return true;
     } catch (err) {
@@ -38,79 +38,74 @@ export class WebRTCManager {
     }
   }
 
-  private setupSocketListeners() {
-    this.socket.on('existing-users', (users: any[]) => {
-      users.forEach(user => {
-        this.userToSocket.set(user.id, user.socketId);
-        this.createPeerConnection(user.id, user.socketId, true);
-      });
-    });
+  private setupSignaling() {
+    const q = query(
+      collection(db, 'signals'),
+      where('receiverId', '==', this.userId),
+      orderBy('timestamp', 'asc')
+    );
 
-    this.socket.on('user-joined', (user: any) => {
-      this.userToSocket.set(user.id, user.socketId);
-      this.createPeerConnection(user.id, user.socketId, false);
-    });
-
-    this.socket.on('user-left', (userId: string) => {
-      this.removePeerConnection(userId);
-      this.userToSocket.delete(userId);
-    });
-
-    this.socket.on('offer', async (data: any) => {
-      let pc = this.peers.get(data.callerId);
-      if (!pc) {
-        this.userToSocket.set(data.callerId, data.callerSocket);
-        pc = this.createPeerConnection(data.callerId, data.callerSocket, false);
-      }
-      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      this.socket.emit('answer', { targetSocket: data.callerSocket, sdp: answer });
-    });
-
-    this.socket.on('answer', async (data: any) => {
-      // Find peer by socketId
-      let targetUserId = null;
-      for (const [userId, socketId] of this.userToSocket.entries()) {
-        if (socketId === data.calleeSocket) {
-          targetUserId = userId;
-          break;
-        }
-      }
-      if (targetUserId) {
-        const pc = this.peers.get(targetUserId);
-        if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        }
-      }
-    });
-
-    this.socket.on('ice-candidate', async (data: any) => {
-      let targetUserId = null;
-      for (const [userId, socketId] of this.userToSocket.entries()) {
-        if (socketId === data.senderSocket) {
-          targetUserId = userId;
-          break;
-        }
-      }
-      if (targetUserId) {
-        const pc = this.peers.get(targetUserId);
-        if (pc) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } catch (e) {
-            console.error("Error adding received ice candidate", e);
+    this.unsubSignals = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach(async (change) => {
+        if (change.type === 'added') {
+          const data = change.doc.data();
+          const senderId = data.senderId;
+          
+          if (data.type === 'offer') {
+            let pc = this.peers.get(senderId);
+            if (!pc) {
+              pc = this.createPeerConnection(senderId);
+            }
+            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.data)));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            this.sendSignal(senderId, 'answer', JSON.stringify(answer));
+          } else if (data.type === 'answer') {
+            const pc = this.peers.get(senderId);
+            if (pc) {
+              await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.data)));
+            }
+          } else if (data.type === 'candidate') {
+            const pc = this.peers.get(senderId);
+            if (pc) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(data.data)));
+              } catch (e) {
+                console.error("Error adding received ice candidate", e);
+              }
+            }
           }
         }
-      }
-    });
-
-    this.socket.on('ptt-status', (data: any) => {
-      this.onUserTalking(data.userId, data.isTalking, data.target);
+      });
     });
   }
 
-  private createPeerConnection(targetUserId: string, targetSocketId: string, isInitiator: boolean) {
+  private async sendSignal(receiverId: string, type: 'offer' | 'answer' | 'candidate', data: string) {
+    try {
+      await addDoc(collection(db, 'signals'), {
+        senderId: this.userId,
+        receiverId,
+        type,
+        data,
+        timestamp: serverTimestamp()
+      });
+    } catch (e) {
+      console.error("Error sending signal", e);
+    }
+  }
+
+  public connectToPeer(targetUserId: string) {
+    if (!this.peers.has(targetUserId)) {
+      // Only the lexicographically smaller ID initiates the offer to avoid glare
+      if (this.userId < targetUserId) {
+        this.createPeerConnection(targetUserId, true);
+      } else {
+        this.createPeerConnection(targetUserId, false);
+      }
+    }
+  }
+
+  private createPeerConnection(targetUserId: string, isInitiator: boolean = false) {
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -121,13 +116,12 @@ export class WebRTCManager {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        this.socket.emit('ice-candidate', { targetSocket: targetSocketId, candidate: event.candidate });
+        this.sendSignal(targetUserId, 'candidate', JSON.stringify(event.candidate));
       }
     };
 
     pc.ontrack = (event) => {
-      // Route incoming audio to our Web Audio API Engine
-      audioEngine.addStream(targetUserId, event.streams[0], true); // Default to team channel
+      audioEngine.addStream(targetUserId, event.streams[0], true);
     };
 
     if (this.localStream) {
@@ -140,14 +134,14 @@ export class WebRTCManager {
       pc.createOffer().then(offer => {
         return pc.setLocalDescription(offer);
       }).then(() => {
-        this.socket.emit('offer', { targetSocket: targetSocketId, sdp: pc.localDescription });
+        this.sendSignal(targetUserId, 'offer', JSON.stringify(pc.localDescription));
       });
     }
 
     return pc;
   }
 
-  private removePeerConnection(targetUserId: string) {
+  public removePeerConnection(targetUserId: string) {
     const pc = this.peers.get(targetUserId);
     if (pc) {
       pc.close();
@@ -156,8 +150,9 @@ export class WebRTCManager {
     }
   }
 
-  broadcastPTT(isTalking: boolean, target: string = 'team') {
-    this.setLocalMicEnabled(isTalking);
-    this.socket.emit('ptt-status', { isTalking, target });
+  public disconnect() {
+    if (this.unsubSignals) this.unsubSignals();
+    this.peers.forEach(pc => pc.close());
+    this.peers.clear();
   }
 }

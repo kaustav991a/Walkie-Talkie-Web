@@ -1,15 +1,18 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
 import { Mic, MicOff, Users, User, Bell, Settings, Radio, Send, MessageSquare } from 'lucide-react';
 import { WebRTCManager } from './lib/webrtc';
 import { audioEngine } from './lib/audio';
 import { cn } from './lib/utils';
+import { auth, db, signInWithGoogle, logout } from './firebase';
+import { collection, doc, setDoc, onSnapshot, query, orderBy, addDoc, serverTimestamp, limit } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 interface UserState {
   id: string;
   name: string;
   isTalking: boolean;
   target: string;
+  lastSeen?: number;
 }
 
 interface ChatMessage {
@@ -17,174 +20,197 @@ interface ChatMessage {
   senderId: string;
   senderName: string;
   text: string;
-  timestamp: string;
+  timestamp: number;
   target: string;
 }
 
 export default function App() {
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [rtcManager, setRtcManager] = useState<WebRTCManager | null>(null);
   const [joined, setJoined] = useState(false);
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [userId, setUserId] = useState('');
   const [authError, setAuthError] = useState('');
   const [users, setUsers] = useState<Map<string, UserState>>(new Map());
   const [isPTTActive, setIsPTTActive] = useState(false);
-  const [activeTarget, setActiveTarget] = useState<string>('team'); // 'team' or userId
+  const [activeTarget, setActiveTarget] = useState<string>('team');
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [micError, setMicError] = useState<string>('');
+  const [isAuthReady, setIsAuthReady] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const requestRef = useRef<number>();
 
-  // Fetch persistent users on load
   useEffect(() => {
-    fetch('/api/users')
-      .then(res => res.json())
-      .then(data => {
-        setUsers(prev => {
-          const newMap = new Map(prev);
-          data.forEach((u: any) => {
-            if (!newMap.has(u.id)) {
-              newMap.set(u.id, { id: u.id, name: u.username, isTalking: false, target: 'team' });
-            }
-          });
-          return newMap;
-        });
-      })
-      .catch(console.error);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUserId(user.uid);
+        setUsername(user.displayName || 'Anonymous');
+        setJoined(true);
+      } else {
+        setJoined(false);
+        setUserId('');
+        setUsername('');
+      }
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
   }, []);
 
-  const handleAuth = async (type: 'login' | 'register') => {
+  const handleLogin = async () => {
     setAuthError('');
     try {
-      const res = await fetch(`/api/${type}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error || 'Authentication failed');
-        return;
-      }
-      setUserId(data.user.id);
-      setUsername(data.user.username);
-      setJoined(true);
+      await signInWithGoogle();
     } catch (e: any) {
       console.error("Auth error:", e);
-      setAuthError(e.message || 'Network error');
+      setAuthError(e.message || 'Authentication failed');
     }
   };
 
-  // Initialize Socket and WebRTC
+  const handleLogout = async () => {
+    if (rtcManager) {
+      rtcManager.disconnect();
+    }
+    await logout();
+  };
+
+  // Initialize WebRTC and Firestore Listeners
   useEffect(() => {
-    if (!joined || !userId || !username) return;
+    if (!joined || !userId || !username || !isAuthReady) return;
 
-    const newSocket = io();
-    setSocket(newSocket);
+    // Update own presence
+    const userRef = doc(db, 'users', userId);
+    setDoc(userRef, {
+      uid: userId,
+      username,
+      isTalking: false,
+      target: 'team',
+      lastSeen: Date.now()
+    }, { merge: true });
 
-    const manager = new WebRTCManager(newSocket, (incomingUserId, isTalking, target) => {
-      setUsers(prev => {
-        const newMap = new Map(prev);
-        const user = newMap.get(incomingUserId);
-        if (user) {
-          newMap.set(incomingUserId, { ...user, isTalking, target });
-        }
-        return newMap;
-      });
+    // Keep presence alive
+    const presenceInterval = setInterval(() => {
+      setDoc(userRef, { lastSeen: Date.now() }, { merge: true });
+    }, 30000);
 
-      // Audio Ducking Logic
-      if (isTalking && target !== 'team') {
-        audioEngine.duckTeam(true);
-      } else if (!isTalking) {
-        audioEngine.duckTeam(false);
-      }
-
-      // Desktop Notification Logic
-      if (isTalking && notificationsEnabled) {
-        const user = users.get(incomingUserId);
-        if (user && document.hidden) {
-          new Notification(`New Message from ${user.name}`, {
-            body: target === 'team' ? 'Speaking to Team' : 'Direct Message',
-            icon: '/favicon.ico'
-          });
-        }
-      }
+    const manager = new WebRTCManager(userId, (incomingUserId, isTalking, target) => {
+      // Handled by Firestore users listener now
     });
 
     setRtcManager(manager);
 
-    newSocket.on('chat-message', (msg: ChatMessage) => {
-      setMessages(prev => [...prev, msg]);
-      
-      if (notificationsEnabled && document.hidden) {
-        new Notification(`Text from ${msg.senderName}`, {
-          body: msg.text,
-          icon: '/favicon.ico'
-        });
-      }
-    });
-
-    newSocket.on('connect', async () => {
+    const initMic = async () => {
       const micGranted = await manager.initializeLocalStream();
       if (micGranted) {
         audioEngine.init();
       } else {
         setMicError("Microphone access denied. You can still use text chat.");
       }
-      newSocket.emit('join', { id: userId, username });
-    });
+    };
+    initMic();
 
-    newSocket.on('existing-users', (existingUsers: any[]) => {
+    // Listen to Users
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       setUsers(prev => {
         const newMap = new Map(prev);
-        existingUsers.forEach(u => {
-          if (newMap.has(u.id)) {
-             newMap.set(u.id, { ...newMap.get(u.id)!, isTalking: false, target: 'team' });
-          } else {
-             newMap.set(u.id, { ...u, isTalking: false, target: 'team' });
+        snapshot.docs.forEach(docSnap => {
+          const data = docSnap.data();
+          if (data.uid === userId) return; // Skip self
+          
+          // Clean up stale users (not seen in 2 mins)
+          if (Date.now() - (data.lastSeen || 0) > 120000) {
+            newMap.delete(data.uid);
+            manager.removePeerConnection(data.uid);
+            return;
+          }
+
+          const isTalking = data.isTalking || false;
+          const target = data.target || 'team';
+          
+          newMap.set(data.uid, {
+            id: data.uid,
+            name: data.username,
+            isTalking,
+            target,
+            lastSeen: data.lastSeen
+          });
+
+          // Connect WebRTC if not connected
+          manager.connectToPeer(data.uid);
+
+          // Audio Ducking Logic
+          if (isTalking && target !== 'team') {
+            audioEngine.duckTeam(true);
+          } else if (!isTalking) {
+            audioEngine.duckTeam(false);
+          }
+
+          // Desktop Notification Logic
+          if (isTalking && notificationsEnabled && document.hidden) {
+            new Notification(`New Message from ${data.username}`, {
+              body: target === 'team' ? 'Speaking to Team' : 'Direct Message',
+              icon: '/favicon.ico'
+            });
           }
         });
         return newMap;
       });
     });
 
-    newSocket.on('user-joined', (user: any) => {
-      setUsers(prev => {
-        const newMap = new Map(prev);
-        if (newMap.has(user.id)) {
-           newMap.set(user.id, { ...newMap.get(user.id)!, name: user.name, isTalking: false, target: 'team' });
-        } else {
-           newMap.set(user.id, { ...user, isTalking: false, target: 'team' });
+    // Listen to Messages
+    const qMessages = query(collection(db, 'messages'), orderBy('timestamp', 'desc'), limit(50));
+    const unsubMessages = onSnapshot(qMessages, (snapshot) => {
+      const msgs: ChatMessage[] = [];
+      snapshot.docs.forEach(docSnap => {
+        const data = docSnap.data();
+        msgs.push({
+          id: docSnap.id,
+          senderId: data.senderId,
+          senderName: data.senderName,
+          text: data.text,
+          timestamp: data.timestamp,
+          target: data.target
+        });
+      });
+      msgs.reverse(); // Oldest first
+      
+      setMessages(prev => {
+        // Check for new messages for notifications
+        if (notificationsEnabled && document.hidden && msgs.length > prev.length) {
+          const newMsg = msgs[msgs.length - 1];
+          if (newMsg.senderId !== userId) {
+            new Notification(`Text from ${newMsg.senderName}`, {
+              body: newMsg.text,
+              icon: '/favicon.ico'
+            });
+          }
         }
-        return newMap;
+        return msgs;
       });
     });
 
-    // We don't remove users on disconnect anymore to keep the roster persistent
-    // Just mark them offline if we had an online status, but for now we just keep them in the list.
-
     return () => {
-      newSocket.disconnect();
+      clearInterval(presenceInterval);
+      unsubUsers();
+      unsubMessages();
+      manager.disconnect();
       cancelAnimationFrame(requestRef.current!);
     };
-  }, [joined, userId, username]);
+  }, [joined, userId, username, isAuthReady, notificationsEnabled]);
 
   // Global Hotkey (Spacebar) for PTT
   useEffect(() => {
-    if (!rtcManager) return;
+    if (!rtcManager || !joined) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat && e.target === document.body) {
         e.preventDefault();
         setIsPTTActive(true);
-        audioEngine.resume(); // Ensure AudioContext is running
-        rtcManager.broadcastPTT(true, activeTarget);
+        audioEngine.resume();
+        rtcManager.setLocalMicEnabled(true);
+        setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
       }
     };
 
@@ -192,7 +218,8 @@ export default function App() {
       if (e.code === 'Space' && e.target === document.body) {
         e.preventDefault();
         setIsPTTActive(false);
-        rtcManager.broadcastPTT(false, activeTarget);
+        rtcManager.setLocalMicEnabled(false);
+        setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
       }
     };
 
@@ -203,7 +230,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [rtcManager, activeTarget]);
+  }, [rtcManager, activeTarget, joined, userId]);
 
   // Waveform Visualization
   const drawWaveform = useCallback(() => {
@@ -219,7 +246,6 @@ export default function App() {
 
     ctx.clearRect(0, 0, width, height);
 
-    // Determine if anyone is talking to set color
     const isAnyoneTalking = Array.from(users.values()).some(u => u.isTalking) || isPTTActive;
     
     ctx.lineWidth = 3;
@@ -267,15 +293,22 @@ export default function App() {
     }
   };
 
-  const sendMessage = (e: React.FormEvent) => {
+  const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || !socket) return;
+    if (!chatInput.trim() || !userId) return;
     
-    socket.emit('chat-message', {
-      text: chatInput.trim(),
-      target: activeTarget
-    });
-    setChatInput('');
+    try {
+      await addDoc(collection(db, 'messages'), {
+        senderId: userId,
+        senderName: username,
+        text: chatInput.trim(),
+        target: activeTarget,
+        timestamp: Date.now()
+      });
+      setChatInput('');
+    } catch (err) {
+      console.error("Error sending message", err);
+    }
   };
 
   const activeMessages = messages.filter(m => 
@@ -283,6 +316,10 @@ export default function App() {
     (m.target === activeTarget && m.senderId === userId) || 
     (m.senderId === activeTarget && m.target === userId)
   );
+
+  if (!isAuthReady) {
+    return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500">Loading...</div>;
+  }
 
   if (!joined) {
     return (
@@ -294,7 +331,7 @@ export default function App() {
             </div>
           </div>
           <h1 className="text-2xl font-semibold text-center mb-2">Walkie-Talkie</h1>
-          <p className="text-zinc-400 text-center mb-6 text-sm">Log in or register to join the frequency.</p>
+          <p className="text-zinc-400 text-center mb-6 text-sm">Log in with Google to join the frequency.</p>
           
           {authError && (
             <div className="bg-red-500/10 text-red-500 text-sm p-3 rounded-lg mb-4 text-center border border-red-500/20">
@@ -302,38 +339,13 @@ export default function App() {
             </div>
           )}
 
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Callsign (e.g. Maverick)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 mb-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all"
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 mb-6 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all"
-            onKeyDown={(e) => e.key === 'Enter' && username && password && handleAuth('login')}
-          />
-          
-          <div className="flex gap-3">
-            <button
-              onClick={() => handleAuth('login')}
-              disabled={!username || !password}
-              className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg transition-colors"
-            >
-              Login
-            </button>
-            <button
-              onClick={() => handleAuth('register')}
-              disabled={!username || !password}
-              className="flex-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg transition-colors"
-            >
-              Register
-            </button>
-          </div>
+          <button
+            onClick={handleLogin}
+            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            <User className="w-5 h-5" />
+            Sign in with Google
+          </button>
         </div>
       </div>
     );
@@ -416,7 +428,7 @@ export default function App() {
           </div>
           <div className="flex-1 truncate">
             <div className="font-medium text-sm text-zinc-200 truncate">{username}</div>
-            <div className="text-xs text-emerald-500">Online</div>
+            <div className="text-xs text-emerald-500 cursor-pointer hover:underline" onClick={handleLogout}>Logout</div>
           </div>
           <button className="text-zinc-500 hover:text-zinc-300 transition-colors">
             <Settings className="w-4 h-4" />
@@ -481,16 +493,19 @@ export default function App() {
             onMouseDown={() => {
               setIsPTTActive(true);
               audioEngine.resume();
-              rtcManager?.broadcastPTT(true, activeTarget);
+              rtcManager?.setLocalMicEnabled(true);
+              setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
             }}
             onMouseUp={() => {
               setIsPTTActive(false);
-              rtcManager?.broadcastPTT(false, activeTarget);
+              rtcManager?.setLocalMicEnabled(false);
+              setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
             }}
             onMouseLeave={() => {
               if (isPTTActive) {
                 setIsPTTActive(false);
-                rtcManager?.broadcastPTT(false, activeTarget);
+                rtcManager?.setLocalMicEnabled(false);
+                setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
               }
             }}
             className={cn(
