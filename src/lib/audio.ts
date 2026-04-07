@@ -3,6 +3,7 @@ export class AudioEngine {
   analyser: AnalyserNode | null = null;
   audioElements: Map<string, { audio: HTMLAudioElement, isTeam: boolean, source: MediaStreamAudioSourceNode | null, gain: GainNode | null }> = new Map();
   audioPool: HTMLAudioElement[] = [];
+  activeStates: Map<string, boolean> = new Map();
   isDucking: boolean = false;
 
   init() {
@@ -26,6 +27,8 @@ export class AudioEngine {
       navigator.mediaSession.playbackState = 'playing';
     }
 
+    const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
     // Pre-create audio elements during user interaction to bypass background autoplay restrictions
     for (let i = 0; i < 15; i++) {
       const audio = new Audio();
@@ -34,9 +37,12 @@ export class AudioEngine {
       audio.style.display = 'none';
       document.body.appendChild(audio);
       
-      // Unlock the audio element for future background playback
+      // Unlock the audio element for future background playback with a silent WAV
+      audio.src = silentWav;
       audio.play().then(() => {
         audio.pause();
+        audio.src = '';
+        audio.srcObject = null;
       }).catch(e => {
         // Ignore autoplay errors here, they just mean we didn't have a strong enough user gesture yet
       });
@@ -50,16 +56,17 @@ export class AudioEngine {
     this.removeStream(id);
 
     try {
-      let audio = this.audioPool.find(a => !a.srcObject);
+      let audio = this.audioPool.find(a => !a.srcObject && !a.src);
       if (!audio) {
         audio = new Audio();
-        audio.muted = true;
         audio.setAttribute('playsinline', 'true');
         audio.style.display = 'none';
         document.body.appendChild(audio);
         this.audioPool.push(audio);
       }
 
+      const isActive = this.activeStates.get(id) || false;
+      audio.muted = !isActive; // Sync with current active state immediately!
       audio.autoplay = true;
       audio.srcObject = stream;
       audio.play().catch(e => console.warn("Audio play failed (needs interaction):", e));
@@ -71,7 +78,7 @@ export class AudioEngine {
       if (this.ctx) {
         source = this.ctx.createMediaStreamSource(stream);
         gain = this.ctx.createGain();
-        gain.gain.value = 0; // Start muted in visualizer too
+        gain.gain.value = isActive ? 1 : 0; // Sync visualizer state
         source.connect(gain);
         gain.connect(this.analyser!);
       }
@@ -87,6 +94,7 @@ export class AudioEngine {
     if (item) {
       item.audio.pause();
       item.audio.srcObject = null;
+      item.audio.src = '';
       // We don't remove from DOM, we keep it in the pool for reuse
       if (item.source && item.gain) {
         item.source.disconnect();
@@ -97,6 +105,7 @@ export class AudioEngine {
   }
 
   setStreamActive(id: string, active: boolean, isTeam: boolean) {
+    this.activeStates.set(id, active);
     const item = this.audioElements.get(id);
     if (item) {
       item.isTeam = isTeam;

@@ -10,12 +10,19 @@ export class WebRTCManager {
   peerSessionIds: Map<string, string> = new Map();
   pendingCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
   onUserTalking: (userId: string, isTalking: boolean, target: string) => void;
+  onConnectionStateChange?: (userId: string, state: string) => void;
   unsubSignals: (() => void) | null = null;
 
-  constructor(userId: string, sessionId: string, onUserTalking: (userId: string, isTalking: boolean, target: string) => void) {
+  constructor(
+    userId: string, 
+    sessionId: string, 
+    onUserTalking: (userId: string, isTalking: boolean, target: string) => void,
+    onConnectionStateChange?: (userId: string, state: string) => void
+  ) {
     this.userId = userId;
     this.sessionId = sessionId;
     this.onUserTalking = onUserTalking;
+    this.onConnectionStateChange = onConnectionStateChange;
     this.setupSignaling();
   }
 
@@ -164,9 +171,21 @@ export class WebRTCManager {
     this.peers.set(targetUserId, pc);
 
     pc.oniceconnectionstatechange = () => {
+      if (this.onConnectionStateChange) {
+        this.onConnectionStateChange(targetUserId, pc.iceConnectionState);
+      }
       if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
         console.log(`ICE connection lost with ${targetUserId}`);
         this.removePeerConnection(targetUserId);
+        
+        // Auto-reconnect after a short delay to handle spotty corporate networks
+        setTimeout(() => {
+          const targetSessionId = this.peerSessionIds.get(targetUserId);
+          if (targetSessionId) {
+            console.log(`Attempting to auto-reconnect to ${targetUserId}`);
+            this.connectToPeer(targetUserId, targetSessionId);
+          }
+        }, 2000);
       }
     };
 

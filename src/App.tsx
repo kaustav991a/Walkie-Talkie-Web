@@ -42,6 +42,7 @@ export default function App() {
   const [micError, setMicError] = useState<string>('');
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
+  const [connectionStates, setConnectionStates] = useState<Record<string, string>>({});
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -119,7 +120,9 @@ export default function App() {
     let unsubMessages: (() => void) | undefined;
     let presenceInterval: any;
 
-    const manager = new WebRTCManager(userId, sessionId, () => {});
+    const manager = new WebRTCManager(userId, sessionId, () => {}, (uid, state) => {
+      setConnectionStates(prev => ({ ...prev, [uid]: state }));
+    });
     setRtcManager(manager);
 
     const init = async () => {
@@ -497,7 +500,15 @@ export default function App() {
                 )} />
               </div>
               <div className="flex-1 text-left truncate">
-                <div className="font-medium text-sm truncate">{user.name}</div>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-sm truncate">{user.name}</span>
+                  <div className={cn(
+                    "w-2 h-2 rounded-full",
+                    connectionStates[user.id] === 'connected' || connectionStates[user.id] === 'completed' ? "bg-emerald-500" :
+                    connectionStates[user.id] === 'failed' || connectionStates[user.id] === 'disconnected' ? "bg-red-500" :
+                    "bg-yellow-500 animate-pulse"
+                  )} title={`Connection: ${connectionStates[user.id] || 'connecting'}`} />
+                </div>
                 <div className="text-xs text-zinc-500 truncate">
                   {user.isTalking ? 'Transmitting...' : 'Idle'}
                 </div>
