@@ -67,11 +67,22 @@ export class AudioEngine {
     if (item) {
       item.isTeam = isTeam;
       item.audio.muted = !active; // Unmute the speaker if they are talking to us
+      if (active && item.audio.paused) {
+        item.audio.play().catch(e => console.warn("Play failed on unmute", e));
+      }
       if (item.gain) {
         item.gain.gain.value = active ? 1 : 0; // Show in waveform if active
       }
       this.updateVolumes();
     }
+  }
+
+  playAll() {
+    this.audioElements.forEach(item => {
+      if (item.audio.paused && !item.audio.muted) {
+        item.audio.play().catch(e => console.warn("PlayAll failed", e));
+      }
+    });
   }
 
   duckTeam(duck: boolean) {

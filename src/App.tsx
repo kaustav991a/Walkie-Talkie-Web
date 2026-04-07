@@ -13,6 +13,7 @@ interface UserState {
   isTalking: boolean;
   target: string;
   lastSeen?: number;
+  sessionId?: string;
 }
 
 interface ChatMessage {
@@ -40,6 +41,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [micError, setMicError] = useState<string>('');
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -94,7 +96,7 @@ export default function App() {
     let unsubMessages: (() => void) | undefined;
     let presenceInterval: any;
 
-    const manager = new WebRTCManager(userId, () => {});
+    const manager = new WebRTCManager(userId, sessionId, () => {});
     setRtcManager(manager);
 
     const init = async () => {
@@ -113,11 +115,12 @@ export default function App() {
         username,
         isTalking: false,
         target: 'team',
-        lastSeen: Date.now()
+        lastSeen: Date.now(),
+        sessionId
       }, { merge: true });
 
       presenceInterval = setInterval(() => {
-        setDoc(userRef, { lastSeen: Date.now() }, { merge: true });
+        setDoc(userRef, { lastSeen: Date.now(), sessionId }, { merge: true });
       }, 30000);
 
       // 3. Listen to Users (Now that we have the mic, we can safely connect to peers)
@@ -141,16 +144,22 @@ export default function App() {
             const target = data.target || 'team';
             const prevUser = prev.get(data.uid);
             
+            // If user reconnected with a new session, drop the old connection
+            if (prevUser && prevUser.sessionId && prevUser.sessionId !== data.sessionId) {
+              manager.removePeerConnection(data.uid);
+            }
+
             newMap.set(data.uid, {
               id: data.uid,
               name: data.username,
               isTalking,
               target,
-              lastSeen: data.lastSeen
+              lastSeen: data.lastSeen,
+              sessionId: data.sessionId
             });
 
             // Connect WebRTC if not connected
-            manager.connectToPeer(data.uid);
+            manager.connectToPeer(data.uid, data.sessionId);
 
             const shouldHear = isTalking && (target === 'team' || target === userId);
             const isTeamStream = target === 'team';
@@ -232,6 +241,7 @@ export default function App() {
         e.preventDefault();
         setIsPTTActive(true);
         audioEngine.resume();
+        audioEngine.playAll();
         rtcManager.setLocalMicEnabled(true);
         setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
       }
@@ -346,7 +356,7 @@ export default function App() {
 
   if (!joined) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-100 font-sans">
+      <div className="h-screen bg-zinc-950 flex items-center justify-center text-zinc-100 font-sans">
         <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-800 shadow-2xl w-full max-w-md">
           <div className="flex items-center justify-center mb-8">
             <div className="w-16 h-16 bg-emerald-500/10 rounded-full flex items-center justify-center">
@@ -375,9 +385,9 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden">
+    <div className="h-screen bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden">
       {/* Sidebar: DMs and Team */}
-      <div className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col">
+      <div className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col h-full">
         <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Radio className="w-5 h-5 text-emerald-500" />
@@ -460,7 +470,7 @@ export default function App() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col relative">
+      <div className="flex-1 flex flex-col relative h-full overflow-hidden">
         {/* Top Bar */}
         <div className="h-16 border-b border-zinc-800 flex items-center px-6 justify-between bg-zinc-950/50 backdrop-blur-sm z-10">
           <div className="flex items-center gap-3">
@@ -516,6 +526,7 @@ export default function App() {
             onMouseDown={() => {
               setIsPTTActive(true);
               audioEngine.resume();
+              audioEngine.playAll();
               rtcManager?.setLocalMicEnabled(true);
               setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
             }}
@@ -550,7 +561,7 @@ export default function App() {
       </div>
 
       {/* Right Sidebar: Chat */}
-      <div className="w-80 bg-zinc-900 border-l border-zinc-800 flex flex-col">
+      <div className="w-80 bg-zinc-900 border-l border-zinc-800 flex flex-col h-full">
         <div className="h-16 border-b border-zinc-800 flex items-center px-4 gap-2">
           <MessageSquare className="w-5 h-5 text-emerald-500" />
           <span className="font-semibold tracking-tight">

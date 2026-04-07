@@ -4,14 +4,17 @@ import { collection, addDoc, onSnapshot, query, where, orderBy } from 'firebase/
 
 export class WebRTCManager {
   userId: string;
+  sessionId: string;
   localStream: MediaStream | null = null;
   peers: Map<string, RTCPeerConnection> = new Map();
+  peerSessionIds: Map<string, string> = new Map();
   pendingCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
   onUserTalking: (userId: string, isTalking: boolean, target: string) => void;
   unsubSignals: (() => void) | null = null;
 
-  constructor(userId: string, onUserTalking: (userId: string, isTalking: boolean, target: string) => void) {
+  constructor(userId: string, sessionId: string, onUserTalking: (userId: string, isTalking: boolean, target: string) => void) {
     this.userId = userId;
+    this.sessionId = sessionId;
     this.onUserTalking = onUserTalking;
     this.setupSignaling();
   }
@@ -40,7 +43,6 @@ export class WebRTCManager {
   }
 
   private setupSignaling() {
-    const now = Date.now();
     const q = query(
       collection(db, 'signals'),
       where('receiverId', '==', this.userId),
@@ -52,8 +54,8 @@ export class WebRTCManager {
         if (change.type === 'added') {
           const data = change.doc.data();
           
-          // Ignore stale signals from previous sessions (older than 15 seconds before we joined)
-          if (data.timestamp < now - 15000) return;
+          // Ignore signals meant for a previous session of ours!
+          if (data.receiverSessionId && data.receiverSessionId !== this.sessionId) return;
 
           const senderId = data.senderId;
           
@@ -110,10 +112,12 @@ export class WebRTCManager {
   }
 
   private async sendSignal(receiverId: string, type: 'offer' | 'answer' | 'candidate', data: string) {
+    const receiverSessionId = this.peerSessionIds.get(receiverId);
     try {
       await addDoc(collection(db, 'signals'), {
         senderId: this.userId,
         receiverId,
+        receiverSessionId: receiverSessionId || '',
         type,
         data,
         timestamp: Date.now() // Use Date.now() instead of serverTimestamp to avoid null sorting issues
@@ -123,7 +127,8 @@ export class WebRTCManager {
     }
   }
 
-  public connectToPeer(targetUserId: string) {
+  public connectToPeer(targetUserId: string, targetSessionId: string) {
+    this.peerSessionIds.set(targetUserId, targetSessionId);
     if (!this.peers.has(targetUserId)) {
       // Only the lexicographically smaller ID initiates the offer to avoid glare
       if (this.userId < targetUserId) {
@@ -138,11 +143,21 @@ export class WebRTCManager {
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
       ]
     });
 
     this.peers.set(targetUserId, pc);
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+        console.log(`ICE connection lost with ${targetUserId}`);
+        this.removePeerConnection(targetUserId);
+      }
+    };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
