@@ -26,47 +26,87 @@ export default function App() {
   const [rtcManager, setRtcManager] = useState<WebRTCManager | null>(null);
   const [joined, setJoined] = useState(false);
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [userId, setUserId] = useState('');
+  const [authError, setAuthError] = useState('');
   const [users, setUsers] = useState<Map<string, UserState>>(new Map());
   const [isPTTActive, setIsPTTActive] = useState(false);
   const [activeTarget, setActiveTarget] = useState<string>('team'); // 'team' or userId
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [micError, setMicError] = useState<string>('');
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const requestRef = useRef<number>();
 
+  // Fetch persistent users on load
+  useEffect(() => {
+    fetch('/api/users')
+      .then(res => res.json())
+      .then(data => {
+        setUsers(prev => {
+          const newMap = new Map(prev);
+          data.forEach((u: any) => {
+            if (!newMap.has(u.id)) {
+              newMap.set(u.id, { id: u.id, name: u.username, isTalking: false, target: 'team' });
+            }
+          });
+          return newMap;
+        });
+      })
+      .catch(console.error);
+  }, []);
+
+  const handleAuth = async (type: 'login' | 'register') => {
+    setAuthError('');
+    try {
+      const res = await fetch(`/api/${type}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.error || 'Authentication failed');
+        return;
+      }
+      setUserId(data.user.id);
+      setUsername(data.user.username);
+      setJoined(true);
+    } catch (e) {
+      setAuthError('Network error');
+    }
+  };
+
   // Initialize Socket and WebRTC
   useEffect(() => {
-    if (!joined || !username) return;
+    if (!joined || !userId || !username) return;
 
     const newSocket = io();
     setSocket(newSocket);
 
-    const manager = new WebRTCManager(newSocket, (userId, isTalking, target) => {
+    const manager = new WebRTCManager(newSocket, (incomingUserId, isTalking, target) => {
       setUsers(prev => {
         const newMap = new Map(prev);
-        const user = newMap.get(userId);
+        const user = newMap.get(incomingUserId);
         if (user) {
-          newMap.set(userId, { ...user, isTalking, target });
+          newMap.set(incomingUserId, { ...user, isTalking, target });
         }
         return newMap;
       });
 
       // Audio Ducking Logic
       if (isTalking && target !== 'team') {
-        // Someone is talking directly to someone (maybe us)
-        // Duck the team channel
         audioEngine.duckTeam(true);
       } else if (!isTalking) {
-        // Restore team volume
         audioEngine.duckTeam(false);
       }
 
       // Desktop Notification Logic
       if (isTalking && notificationsEnabled) {
-        const user = users.get(userId);
+        const user = users.get(incomingUserId);
         if (user && document.hidden) {
           new Notification(`New Message from ${user.name}`, {
             body: target === 'team' ? 'Speaking to Team' : 'Direct Message',
@@ -81,7 +121,6 @@ export default function App() {
     newSocket.on('chat-message', (msg: ChatMessage) => {
       setMessages(prev => [...prev, msg]);
       
-      // Notification for text messages
       if (notificationsEnabled && document.hidden) {
         new Notification(`Text from ${msg.senderName}`, {
           body: msg.text,
@@ -94,16 +133,22 @@ export default function App() {
       const micGranted = await manager.initializeLocalStream();
       if (micGranted) {
         audioEngine.init();
-        newSocket.emit('join', username);
       } else {
-        alert("Microphone access is required for the Walkie-Talkie.");
+        setMicError("Microphone access denied. You can still use text chat.");
       }
+      newSocket.emit('join', { id: userId, username });
     });
 
     newSocket.on('existing-users', (existingUsers: any[]) => {
       setUsers(prev => {
         const newMap = new Map(prev);
-        existingUsers.forEach(u => newMap.set(u.id, { ...u, isTalking: false, target: 'team' }));
+        existingUsers.forEach(u => {
+          if (newMap.has(u.id)) {
+             newMap.set(u.id, { ...newMap.get(u.id)!, isTalking: false, target: 'team' });
+          } else {
+             newMap.set(u.id, { ...u, isTalking: false, target: 'team' });
+          }
+        });
         return newMap;
       });
     });
@@ -111,24 +156,23 @@ export default function App() {
     newSocket.on('user-joined', (user: any) => {
       setUsers(prev => {
         const newMap = new Map(prev);
-        newMap.set(user.id, { ...user, isTalking: false, target: 'team' });
+        if (newMap.has(user.id)) {
+           newMap.set(user.id, { ...newMap.get(user.id)!, name: user.name, isTalking: false, target: 'team' });
+        } else {
+           newMap.set(user.id, { ...user, isTalking: false, target: 'team' });
+        }
         return newMap;
       });
     });
 
-    newSocket.on('user-left', (userId: string) => {
-      setUsers(prev => {
-        const newMap = new Map(prev);
-        newMap.delete(userId);
-        return newMap;
-      });
-    });
+    // We don't remove users on disconnect anymore to keep the roster persistent
+    // Just mark them offline if we had an online status, but for now we just keep them in the list.
 
     return () => {
       newSocket.disconnect();
       cancelAnimationFrame(requestRef.current!);
     };
-  }, [joined, username]);
+  }, [joined, userId, username]);
 
   // Global Hotkey (Spacebar) for PTT
   useEffect(() => {
@@ -235,8 +279,8 @@ export default function App() {
 
   const activeMessages = messages.filter(m => 
     m.target === 'team' ? activeTarget === 'team' : 
-    (m.target === activeTarget && m.senderId === socket?.id) || 
-    (m.senderId === activeTarget && m.target === socket?.id)
+    (m.target === activeTarget && m.senderId === userId) || 
+    (m.senderId === activeTarget && m.target === userId)
   );
 
   if (!joined) {
@@ -249,23 +293,46 @@ export default function App() {
             </div>
           </div>
           <h1 className="text-2xl font-semibold text-center mb-2">Walkie-Talkie</h1>
-          <p className="text-zinc-400 text-center mb-8 text-sm">Enter your callsign to join the frequency.</p>
+          <p className="text-zinc-400 text-center mb-6 text-sm">Log in or register to join the frequency.</p>
           
+          {authError && (
+            <div className="bg-red-500/10 text-red-500 text-sm p-3 rounded-lg mb-4 text-center border border-red-500/20">
+              {authError}
+            </div>
+          )}
+
           <input
             type="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="Callsign (e.g. Maverick)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 mb-4 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all"
-            onKeyDown={(e) => e.key === 'Enter' && username && setJoined(true)}
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 mb-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all"
           />
-          <button
-            onClick={() => setJoined(true)}
-            disabled={!username}
-            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg transition-colors"
-          >
-            Connect
-          </button>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 mb-6 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all"
+            onKeyDown={(e) => e.key === 'Enter' && username && password && handleAuth('login')}
+          />
+          
+          <div className="flex gap-3">
+            <button
+              onClick={() => handleAuth('login')}
+              disabled={!username || !password}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg transition-colors"
+            >
+              Login
+            </button>
+            <button
+              onClick={() => handleAuth('register')}
+              disabled={!username || !password}
+              className="flex-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg transition-colors"
+            >
+              Register
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -365,6 +432,11 @@ export default function App() {
             <span className="font-medium text-zinc-200">
               {activeTarget === 'team' ? 'Team Global Frequency' : `Private Channel: ${users.get(activeTarget)?.name}`}
             </span>
+            {micError && (
+              <span className="ml-4 text-xs font-medium text-red-400 bg-red-400/10 px-2 py-1 rounded border border-red-400/20">
+                {micError}
+              </span>
+            )}
           </div>
           
           {/* "Tray" Indicator Simulation */}
@@ -455,7 +527,7 @@ export default function App() {
             </div>
           ) : (
             activeMessages.map(msg => {
-              const isMe = msg.senderId === socket?.id;
+              const isMe = msg.senderId === userId;
               return (
                 <div key={msg.id} className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
                   <div className="flex items-baseline gap-2 mb-1">
