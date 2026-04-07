@@ -1,11 +1,20 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAX9m_YIT2w1MbgrtEbRKaIbZsL3Q-tkZo",
+  authDomain: "walkie-talkie-2f120.firebaseapp.com",
+  projectId: "walkie-talkie-2f120",
+  storageBucket: "walkie-talkie-2f120.firebasestorage.app",
+  messagingSenderId: "836363190026",
+  appId: "1:836363190026:web:53705bbd8f7bb0f8a344f3",
+  measurementId: "G-EJQ40G14WE"
+};
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app);
 
 export const signInWithGoogle = async () => {
   const provider = new GoogleAuthProvider();
