@@ -84,19 +84,17 @@ export class WebRTCManager {
             }
           } else if (data.type === 'candidate') {
             const pc = this.peers.get(senderId);
-            if (pc) {
-              if (pc.remoteDescription) {
-                try {
-                  await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(data.data)));
-                } catch (e) {
-                  console.error("Error adding received ice candidate", e);
-                }
-              } else {
-                if (!this.pendingCandidates.has(senderId)) {
-                  this.pendingCandidates.set(senderId, []);
-                }
-                this.pendingCandidates.get(senderId)!.push(JSON.parse(data.data));
+            if (pc && pc.remoteDescription) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(data.data)));
+              } catch (e) {
+                console.error("Error adding received ice candidate", e);
               }
+            } else {
+              if (!this.pendingCandidates.has(senderId)) {
+                this.pendingCandidates.set(senderId, []);
+              }
+              this.pendingCandidates.get(senderId)!.push(JSON.parse(data.data));
             }
           }
         }
@@ -160,7 +158,8 @@ export class WebRTCManager {
           urls: [
             'turn:openrelay.metered.ca:80',
             'turn:openrelay.metered.ca:443',
-            'turn:openrelay.metered.ca:443?transport=tcp'
+            'turn:openrelay.metered.ca:443?transport=tcp',
+            'turns:openrelay.metered.ca:443?transport=tcp'
           ],
           username: 'openrelayproject',
           credential: 'openrelayproject'
@@ -170,10 +169,29 @@ export class WebRTCManager {
 
     this.peers.set(targetUserId, pc);
 
+    let checkingTimeout: any;
+
     pc.oniceconnectionstatechange = () => {
       if (this.onConnectionStateChange) {
         this.onConnectionStateChange(targetUserId, pc.iceConnectionState);
       }
+      
+      if (pc.iceConnectionState === 'checking') {
+        // If stuck in checking for 15 seconds, force a reconnect
+        checkingTimeout = setTimeout(() => {
+          if (pc.iceConnectionState === 'checking') {
+            console.log(`ICE connection stuck in checking with ${targetUserId}, forcing reconnect`);
+            this.removePeerConnection(targetUserId);
+            setTimeout(() => {
+              const targetSessionId = this.peerSessionIds.get(targetUserId);
+              if (targetSessionId) this.connectToPeer(targetUserId, targetSessionId);
+            }, 1000);
+          }
+        }, 15000);
+      } else {
+        clearTimeout(checkingTimeout);
+      }
+
       if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
         console.log(`ICE connection lost with ${targetUserId}`);
         this.removePeerConnection(targetUserId);
