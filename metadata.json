@@ -1,0 +1,7 @@
+{
+  "name": "Walkie-Talkie Web",
+  "description": "A web-based Walkie-Talkie app simulating Electron desktop features with WebRTC, Socket.io, and Web Audio API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
