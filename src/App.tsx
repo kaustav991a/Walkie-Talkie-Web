@@ -41,6 +41,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [micError, setMicError] = useState<string>('');
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [hasInteracted, setHasInteracted] = useState(false);
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -52,6 +53,22 @@ export default function App() {
     }
   }, []);
   const requestRef = useRef<number>();
+
+  useEffect(() => {
+    const handleInteraction = () => {
+      if (!hasInteracted) {
+        setHasInteracted(true);
+        audioEngine.init();
+        audioEngine.resume();
+      }
+    };
+    window.addEventListener('click', handleInteraction);
+    window.addEventListener('keydown', handleInteraction);
+    return () => {
+      window.removeEventListener('click', handleInteraction);
+      window.removeEventListener('keydown', handleInteraction);
+    };
+  }, [hasInteracted]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -409,7 +426,18 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden">
+    <div className="h-screen bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden relative">
+      {/* Audio Unlock Overlay */}
+      {!hasInteracted && (
+        <div className="absolute inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center cursor-pointer">
+          <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-2xl text-center max-w-sm animate-pulse">
+            <Radio className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold mb-2">Click anywhere to connect</h2>
+            <p className="text-zinc-400 text-sm">Browser policies require interaction before audio can be played.</p>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar: DMs and Team */}
       <div className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col h-full">
         <div className="p-4 border-b border-zinc-800 flex items-center justify-between">

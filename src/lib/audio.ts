@@ -33,6 +33,14 @@ export class AudioEngine {
       audio.setAttribute('playsinline', 'true');
       audio.style.display = 'none';
       document.body.appendChild(audio);
+      
+      // Unlock the audio element for future background playback
+      audio.play().then(() => {
+        audio.pause();
+      }).catch(e => {
+        // Ignore autoplay errors here, they just mean we didn't have a strong enough user gesture yet
+      });
+      
       this.audioPool.push(audio);
     }
   }
