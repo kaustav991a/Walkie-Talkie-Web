@@ -1,81 +1,89 @@
 export class AudioEngine {
   ctx: AudioContext | null = null;
-  teamGain: GainNode | null = null;
-  individualGain: GainNode | null = null;
   analyser: AnalyserNode | null = null;
-  sources: Map<string, MediaStreamAudioSourceNode> = new Map();
-  audioElements: Map<string, HTMLAudioElement> = new Map();
+  audioElements: Map<string, { audio: HTMLAudioElement, isTeam: boolean, source: MediaStreamAudioSourceNode | null, gain: GainNode | null }> = new Map();
+  isDucking: boolean = false;
 
   init() {
     if (this.ctx) return;
     
     // Web Audio API requires user interaction to start in some browsers
     this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    
-    this.teamGain = this.ctx.createGain();
-    this.individualGain = this.ctx.createGain();
     this.analyser = this.ctx.createAnalyser();
-    
     this.analyser.fftSize = 256;
-    
-    // Routing: Sources -> GainNodes -> Analyser -> Destination
-    this.teamGain.connect(this.analyser);
-    this.individualGain.connect(this.analyser);
-    this.analyser.connect(this.ctx.destination);
+    // We intentionally DO NOT connect the analyser to ctx.destination
+    // Playback is handled entirely by the HTMLAudioElement to bypass background tab throttling
   }
 
   addStream(id: string, stream: MediaStream, isTeam: boolean = true) {
-    if (!this.ctx || !this.teamGain || !this.individualGain) this.init();
-    
-    if (this.sources.has(id)) {
-      this.removeStream(id);
-    }
+    this.init();
+    this.removeStream(id);
 
     try {
-      // Workaround for Chrome WebRTC + Web Audio API bug:
-      // The stream must be attached to an HTMLAudioElement or it won't play through the AudioContext
+      // 1. HTMLAudioElement for actual reliable playback (works in background tabs)
       const audio = new Audio();
-      audio.muted = true;
+      audio.autoplay = true;
       audio.srcObject = stream;
-      audio.play().catch(e => console.warn("Audio play failed", e));
-      this.audioElements.set(id, audio);
+      audio.muted = true; // Start muted until they actually press PTT
+      audio.setAttribute('playsinline', 'true'); 
+      audio.play().catch(e => console.warn("Audio play failed (needs interaction):", e));
 
-      const source = this.ctx!.createMediaStreamSource(stream);
-      source.connect(isTeam ? this.teamGain! : this.individualGain!);
-      this.sources.set(id, source);
+      // 2. Web Audio API for the Waveform Visualizer
+      let source: MediaStreamAudioSourceNode | null = null;
+      let gain: GainNode | null = null;
+
+      if (this.ctx) {
+        source = this.ctx.createMediaStreamSource(stream);
+        gain = this.ctx.createGain();
+        gain.gain.value = 0; // Start muted in visualizer too
+        source.connect(gain);
+        gain.connect(this.analyser!);
+      }
+
+      this.audioElements.set(id, { audio, isTeam, source, gain });
     } catch (e) {
       console.error("Error adding stream to AudioEngine:", e);
     }
   }
 
   removeStream(id: string) {
-    const source = this.sources.get(id);
-    if (source) {
-      source.disconnect();
-      this.sources.delete(id);
-    }
-    
-    const audio = this.audioElements.get(id);
-    if (audio) {
-      audio.srcObject = null;
+    const item = this.audioElements.get(id);
+    if (item) {
+      item.audio.pause();
+      item.audio.srcObject = null;
+      if (item.source && item.gain) {
+        item.source.disconnect();
+        item.gain.disconnect();
+      }
       this.audioElements.delete(id);
     }
   }
 
-  duckTeam(duck: boolean) {
-    if (!this.ctx || !this.teamGain) return;
-    
-    const now = this.ctx.currentTime;
-    // Exponential ramp for smooth ducking
-    if (duck) {
-      this.teamGain.gain.cancelScheduledValues(now);
-      this.teamGain.gain.setValueAtTime(this.teamGain.gain.value, now);
-      this.teamGain.gain.exponentialRampToValueAtTime(0.2, now + 0.1);
-    } else {
-      this.teamGain.gain.cancelScheduledValues(now);
-      this.teamGain.gain.setValueAtTime(this.teamGain.gain.value, now);
-      this.teamGain.gain.exponentialRampToValueAtTime(1.0, now + 0.1);
+  setStreamActive(id: string, active: boolean, isTeam: boolean) {
+    const item = this.audioElements.get(id);
+    if (item) {
+      item.isTeam = isTeam;
+      item.audio.muted = !active; // Unmute the speaker if they are talking to us
+      if (item.gain) {
+        item.gain.gain.value = active ? 1 : 0; // Show in waveform if active
+      }
+      this.updateVolumes();
     }
+  }
+
+  duckTeam(duck: boolean) {
+    this.isDucking = duck;
+    this.updateVolumes();
+  }
+
+  private updateVolumes() {
+    this.audioElements.forEach((item) => {
+      if (item.isTeam) {
+        item.audio.volume = this.isDucking ? 0.2 : 1.0;
+      } else {
+        item.audio.volume = 1.0;
+      }
+    });
   }
   
   getWaveformData(): Uint8Array {

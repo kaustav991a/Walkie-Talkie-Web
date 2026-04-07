@@ -4,7 +4,7 @@ import { WebRTCManager } from './lib/webrtc';
 import { audioEngine } from './lib/audio';
 import { cn } from './lib/utils';
 import { auth, db, signInWithGoogle, logout } from './firebase';
-import { collection, doc, setDoc, onSnapshot, query, orderBy, addDoc, serverTimestamp, limit } from 'firebase/firestore';
+import { collection, doc, setDoc, onSnapshot, query, orderBy, addDoc, limit } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 
 interface UserState {
@@ -33,7 +33,9 @@ export default function App() {
   const [users, setUsers] = useState<Map<string, UserState>>(new Map());
   const [isPTTActive, setIsPTTActive] = useState(false);
   const [activeTarget, setActiveTarget] = useState<string>('team');
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    'Notification' in window && Notification.permission === 'granted'
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [micError, setMicError] = useState<string>('');
@@ -62,7 +64,15 @@ export default function App() {
   const handleLogin = async () => {
     setAuthError('');
     try {
+      audioEngine.init();
+      audioEngine.resume();
+      
       await signInWithGoogle();
+      
+      if ('Notification' in window && Notification.permission === 'default') {
+        const perm = await Notification.requestPermission();
+        setNotificationsEnabled(perm === 'granted');
+      }
     } catch (e: any) {
       console.error("Auth error:", e);
       setAuthError(e.message || 'Authentication failed');
@@ -95,9 +105,7 @@ export default function App() {
       setDoc(userRef, { lastSeen: Date.now() }, { merge: true });
     }, 30000);
 
-    const manager = new WebRTCManager(userId, (incomingUserId, isTalking, target) => {
-      // Handled by Firestore users listener now
-    });
+    const manager = new WebRTCManager(userId, () => {});
 
     setRtcManager(manager);
 
@@ -115,6 +123,8 @@ export default function App() {
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       setUsers(prev => {
         const newMap = new Map(prev);
+        let shouldDuck = false;
+
         snapshot.docs.forEach(docSnap => {
           const data = docSnap.data();
           if (data.uid === userId) return; // Skip self
@@ -128,6 +138,7 @@ export default function App() {
 
           const isTalking = data.isTalking || false;
           const target = data.target || 'team';
+          const prevUser = prev.get(data.uid);
           
           newMap.set(data.uid, {
             id: data.uid,
@@ -140,21 +151,29 @@ export default function App() {
           // Connect WebRTC if not connected
           manager.connectToPeer(data.uid);
 
+          const shouldHear = isTalking && (target === 'team' || target === userId);
+          const isTeamStream = target === 'team';
+
+          // Update Audio Engine
+          audioEngine.setStreamActive(data.uid, shouldHear, isTeamStream);
+
           // Audio Ducking Logic
-          if (isTalking && target !== 'team') {
-            audioEngine.duckTeam(true);
-          } else if (!isTalking) {
-            audioEngine.duckTeam(false);
+          if (isTalking && target === userId) {
+            shouldDuck = true;
           }
 
-          // Desktop Notification Logic
-          if (isTalking && notificationsEnabled && document.hidden) {
-            new Notification(`New Message from ${data.username}`, {
-              body: target === 'team' ? 'Speaking to Team' : 'Direct Message',
-              icon: '/favicon.ico'
-            });
+          // Desktop Notification Logic for Voice
+          if (isTalking && (!prevUser || !prevUser.isTalking) && shouldHear) {
+            if (notificationsEnabled && document.hidden) {
+              new Notification(`Incoming Transmission`, {
+                body: `${data.username} is speaking on ${target === 'team' ? 'Team Channel' : 'Private Channel'}`,
+                icon: '/favicon.ico'
+              });
+            }
           }
         });
+
+        audioEngine.duckTeam(shouldDuck);
         return newMap;
       });
     });
@@ -178,10 +197,10 @@ export default function App() {
       
       setMessages(prev => {
         // Check for new messages for notifications
-        if (notificationsEnabled && document.hidden && msgs.length > prev.length) {
+        if (notificationsEnabled && document.hidden && msgs.length > prev.length && prev.length > 0) {
           const newMsg = msgs[msgs.length - 1];
           if (newMsg.senderId !== userId) {
-            new Notification(`Text from ${newMsg.senderName}`, {
+            new Notification(`Message from ${newMsg.senderName}`, {
               body: newMsg.text,
               icon: '/favicon.ico'
             });
