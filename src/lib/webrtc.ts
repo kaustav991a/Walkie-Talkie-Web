@@ -40,6 +40,7 @@ export class WebRTCManager {
   }
 
   private setupSignaling() {
+    const now = Date.now();
     const q = query(
       collection(db, 'signals'),
       where('receiverId', '==', this.userId),
@@ -50,6 +51,10 @@ export class WebRTCManager {
       snapshot.docChanges().forEach(async (change) => {
         if (change.type === 'added') {
           const data = change.doc.data();
+          
+          // Ignore stale signals from previous sessions (older than 15 seconds before we joined)
+          if (data.timestamp < now - 15000) return;
+
           const senderId = data.senderId;
           
           if (data.type === 'offer') {

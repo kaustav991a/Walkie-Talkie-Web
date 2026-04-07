@@ -26,6 +26,8 @@ export class AudioEngine {
       audio.srcObject = stream;
       audio.muted = true; // Start muted until they actually press PTT
       audio.setAttribute('playsinline', 'true'); 
+      audio.style.display = 'none';
+      document.body.appendChild(audio); // Attach to DOM to prevent browser throttling
       audio.play().catch(e => console.warn("Audio play failed (needs interaction):", e));
 
       // 2. Web Audio API for the Waveform Visualizer
@@ -51,6 +53,7 @@ export class AudioEngine {
     if (item) {
       item.audio.pause();
       item.audio.srcObject = null;
+      item.audio.remove(); // Remove from DOM
       if (item.source && item.gain) {
         item.source.disconnect();
         item.gain.disconnect();

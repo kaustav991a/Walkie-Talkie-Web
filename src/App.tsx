@@ -90,130 +90,134 @@ export default function App() {
   useEffect(() => {
     if (!joined || !userId || !username || !isAuthReady) return;
 
-    // Update own presence
-    const userRef = doc(db, 'users', userId);
-    setDoc(userRef, {
-      uid: userId,
-      username,
-      isTalking: false,
-      target: 'team',
-      lastSeen: Date.now()
-    }, { merge: true });
-
-    // Keep presence alive
-    const presenceInterval = setInterval(() => {
-      setDoc(userRef, { lastSeen: Date.now() }, { merge: true });
-    }, 30000);
+    let unsubUsers: (() => void) | undefined;
+    let unsubMessages: (() => void) | undefined;
+    let presenceInterval: any;
 
     const manager = new WebRTCManager(userId, () => {});
-
     setRtcManager(manager);
 
-    const initMic = async () => {
+    const init = async () => {
+      // 1. Initialize Microphone FIRST
       const micGranted = await manager.initializeLocalStream();
       if (micGranted) {
         audioEngine.init();
       } else {
         setMicError("Microphone access denied. You can still use text chat.");
       }
-    };
-    initMic();
 
-    // Listen to Users
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      setUsers(prev => {
-        const newMap = new Map(prev);
-        let shouldDuck = false;
+      // 2. Update own presence
+      const userRef = doc(db, 'users', userId);
+      await setDoc(userRef, {
+        uid: userId,
+        username,
+        isTalking: false,
+        target: 'team',
+        lastSeen: Date.now()
+      }, { merge: true });
 
-        snapshot.docs.forEach(docSnap => {
-          const data = docSnap.data();
-          if (data.uid === userId) return; // Skip self
-          
-          // Clean up stale users (not seen in 2 mins)
-          if (Date.now() - (data.lastSeen || 0) > 120000) {
-            newMap.delete(data.uid);
-            manager.removePeerConnection(data.uid);
-            return;
-          }
+      presenceInterval = setInterval(() => {
+        setDoc(userRef, { lastSeen: Date.now() }, { merge: true });
+      }, 30000);
 
-          const isTalking = data.isTalking || false;
-          const target = data.target || 'team';
-          const prevUser = prev.get(data.uid);
-          
-          newMap.set(data.uid, {
-            id: data.uid,
-            name: data.username,
-            isTalking,
-            target,
-            lastSeen: data.lastSeen
+      // 3. Listen to Users (Now that we have the mic, we can safely connect to peers)
+      unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+        setUsers(prev => {
+          const newMap = new Map(prev);
+          let shouldDuck = false;
+
+          snapshot.docs.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.uid === userId) return; // Skip self
+            
+            // Clean up stale users (not seen in 2 mins)
+            if (Date.now() - (data.lastSeen || 0) > 120000) {
+              newMap.delete(data.uid);
+              manager.removePeerConnection(data.uid);
+              return;
+            }
+
+            const isTalking = data.isTalking || false;
+            const target = data.target || 'team';
+            const prevUser = prev.get(data.uid);
+            
+            newMap.set(data.uid, {
+              id: data.uid,
+              name: data.username,
+              isTalking,
+              target,
+              lastSeen: data.lastSeen
+            });
+
+            // Connect WebRTC if not connected
+            manager.connectToPeer(data.uid);
+
+            const shouldHear = isTalking && (target === 'team' || target === userId);
+            const isTeamStream = target === 'team';
+
+            // Update Audio Engine
+            audioEngine.setStreamActive(data.uid, shouldHear, isTeamStream);
+
+            // Audio Ducking Logic
+            if (isTalking && target === userId) {
+              shouldDuck = true;
+            }
+
+            // Desktop Notification Logic for Voice (Removed document.hidden so it's easier to test)
+            if (isTalking && (!prevUser || !prevUser.isTalking) && shouldHear) {
+              if (notificationsEnabled) {
+                new Notification(`Incoming Transmission`, {
+                  body: `${data.username} is speaking on ${target === 'team' ? 'Team Channel' : 'Private Channel'}`,
+                  icon: '/favicon.ico'
+                });
+              }
+            }
           });
 
-          // Connect WebRTC if not connected
-          manager.connectToPeer(data.uid);
+          audioEngine.duckTeam(shouldDuck);
+          return newMap;
+        });
+      });
 
-          const shouldHear = isTalking && (target === 'team' || target === userId);
-          const isTeamStream = target === 'team';
-
-          // Update Audio Engine
-          audioEngine.setStreamActive(data.uid, shouldHear, isTeamStream);
-
-          // Audio Ducking Logic
-          if (isTalking && target === userId) {
-            shouldDuck = true;
-          }
-
-          // Desktop Notification Logic for Voice
-          if (isTalking && (!prevUser || !prevUser.isTalking) && shouldHear) {
-            if (notificationsEnabled && document.hidden) {
-              new Notification(`Incoming Transmission`, {
-                body: `${data.username} is speaking on ${target === 'team' ? 'Team Channel' : 'Private Channel'}`,
+      // 4. Listen to Messages
+      const qMessages = query(collection(db, 'messages'), orderBy('timestamp', 'desc'), limit(50));
+      unsubMessages = onSnapshot(qMessages, (snapshot) => {
+        const msgs: ChatMessage[] = [];
+        snapshot.docs.forEach(docSnap => {
+          const data = docSnap.data();
+          msgs.push({
+            id: docSnap.id,
+            senderId: data.senderId,
+            senderName: data.senderName,
+            text: data.text,
+            timestamp: data.timestamp,
+            target: data.target
+          });
+        });
+        msgs.reverse(); // Oldest first
+        
+        setMessages(prev => {
+          // Check for new messages for notifications (Removed document.hidden so it's easier to test)
+          if (notificationsEnabled && msgs.length > prev.length && prev.length > 0) {
+            const newMsg = msgs[msgs.length - 1];
+            if (newMsg.senderId !== userId) {
+              new Notification(`Message from ${newMsg.senderName}`, {
+                body: newMsg.text,
                 icon: '/favicon.ico'
               });
             }
           }
-        });
-
-        audioEngine.duckTeam(shouldDuck);
-        return newMap;
-      });
-    });
-
-    // Listen to Messages
-    const qMessages = query(collection(db, 'messages'), orderBy('timestamp', 'desc'), limit(50));
-    const unsubMessages = onSnapshot(qMessages, (snapshot) => {
-      const msgs: ChatMessage[] = [];
-      snapshot.docs.forEach(docSnap => {
-        const data = docSnap.data();
-        msgs.push({
-          id: docSnap.id,
-          senderId: data.senderId,
-          senderName: data.senderName,
-          text: data.text,
-          timestamp: data.timestamp,
-          target: data.target
+          return msgs;
         });
       });
-      msgs.reverse(); // Oldest first
-      
-      setMessages(prev => {
-        // Check for new messages for notifications
-        if (notificationsEnabled && document.hidden && msgs.length > prev.length && prev.length > 0) {
-          const newMsg = msgs[msgs.length - 1];
-          if (newMsg.senderId !== userId) {
-            new Notification(`Message from ${newMsg.senderName}`, {
-              body: newMsg.text,
-              icon: '/favicon.ico'
-            });
-          }
-        }
-        return msgs;
-      });
-    });
+    };
+
+    init();
 
     return () => {
-      clearInterval(presenceInterval);
-      unsubUsers();
-      unsubMessages();
+      if (presenceInterval) clearInterval(presenceInterval);
+      if (unsubUsers) unsubUsers();
+      if (unsubMessages) unsubMessages();
       manager.disconnect();
       cancelAnimationFrame(requestRef.current!);
     };
