@@ -142,11 +142,22 @@ export class WebRTCManager {
   private createPeerConnection(targetUserId: string, isInitiator: boolean = false) {
     const pc = new RTCPeerConnection({
       iceServers: [
+        // Google's public STUN servers (for normal NAT traversal)
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
+        { urls: 'stun:stun4.l.google.com:19302' },
+        // Free public TURN server (OpenRelay by Metered) for strict firewalls / symmetric NATs
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp'
+          ],
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
       ]
     });
 

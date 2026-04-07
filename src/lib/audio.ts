@@ -2,6 +2,7 @@ export class AudioEngine {
   ctx: AudioContext | null = null;
   analyser: AnalyserNode | null = null;
   audioElements: Map<string, { audio: HTMLAudioElement, isTeam: boolean, source: MediaStreamAudioSourceNode | null, gain: GainNode | null }> = new Map();
+  audioPool: HTMLAudioElement[] = [];
   isDucking: boolean = false;
 
   init() {
@@ -11,8 +12,29 @@ export class AudioEngine {
     this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 256;
-    // We intentionally DO NOT connect the analyser to ctx.destination
-    // Playback is handled entirely by the HTMLAudioElement to bypass background tab throttling
+
+    // Anti-throttling: Keep AudioContext alive with a nearly silent oscillator
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0.0001; // Inaudible
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start();
+
+    // Set MediaSession to prevent background throttling
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'playing';
+    }
+
+    // Pre-create audio elements during user interaction to bypass background autoplay restrictions
+    for (let i = 0; i < 15; i++) {
+      const audio = new Audio();
+      audio.muted = true;
+      audio.setAttribute('playsinline', 'true');
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+      this.audioPool.push(audio);
+    }
   }
 
   addStream(id: string, stream: MediaStream, isTeam: boolean = true) {
@@ -20,14 +42,18 @@ export class AudioEngine {
     this.removeStream(id);
 
     try {
-      // 1. HTMLAudioElement for actual reliable playback (works in background tabs)
-      const audio = new Audio();
+      let audio = this.audioPool.find(a => !a.srcObject);
+      if (!audio) {
+        audio = new Audio();
+        audio.muted = true;
+        audio.setAttribute('playsinline', 'true');
+        audio.style.display = 'none';
+        document.body.appendChild(audio);
+        this.audioPool.push(audio);
+      }
+
       audio.autoplay = true;
       audio.srcObject = stream;
-      audio.muted = true; // Start muted until they actually press PTT
-      audio.setAttribute('playsinline', 'true'); 
-      audio.style.display = 'none';
-      document.body.appendChild(audio); // Attach to DOM to prevent browser throttling
       audio.play().catch(e => console.warn("Audio play failed (needs interaction):", e));
 
       // 2. Web Audio API for the Waveform Visualizer
@@ -53,7 +79,7 @@ export class AudioEngine {
     if (item) {
       item.audio.pause();
       item.audio.srcObject = null;
-      item.audio.remove(); // Remove from DOM
+      // We don't remove from DOM, we keep it in the pool for reuse
       if (item.source && item.gain) {
         item.source.disconnect();
         item.gain.disconnect();

@@ -45,6 +45,12 @@ export default function App() {
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(err => console.error('SW registration failed:', err));
+    }
+  }, []);
   const requestRef = useRef<number>();
 
   useEffect(() => {
@@ -175,10 +181,19 @@ export default function App() {
             // Desktop Notification Logic for Voice (Removed document.hidden so it's easier to test)
             if (isTalking && (!prevUser || !prevUser.isTalking) && shouldHear) {
               if (notificationsEnabled) {
-                new Notification(`Incoming Transmission`, {
-                  body: `${data.username} is speaking on ${target === 'team' ? 'Team Channel' : 'Private Channel'}`,
-                  icon: '/favicon.ico'
-                });
+                if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                  navigator.serviceWorker.ready.then(reg => {
+                    reg.showNotification(`Incoming Transmission`, {
+                      body: `${data.username} is speaking on ${target === 'team' ? 'Team Channel' : 'Private Channel'}`,
+                      icon: '/favicon.ico'
+                    });
+                  });
+                } else {
+                  new Notification(`Incoming Transmission`, {
+                    body: `${data.username} is speaking on ${target === 'team' ? 'Team Channel' : 'Private Channel'}`,
+                    icon: '/favicon.ico'
+                  });
+                }
               }
             }
           });
@@ -210,10 +225,19 @@ export default function App() {
           if (notificationsEnabled && msgs.length > prev.length && prev.length > 0) {
             const newMsg = msgs[msgs.length - 1];
             if (newMsg.senderId !== userId) {
-              new Notification(`Message from ${newMsg.senderName}`, {
-                body: newMsg.text,
-                icon: '/favicon.ico'
-              });
+              if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.ready.then(reg => {
+                  reg.showNotification(`Message from ${newMsg.senderName}`, {
+                    body: newMsg.text,
+                    icon: '/favicon.ico'
+                  });
+                });
+              } else {
+                new Notification(`Message from ${newMsg.senderName}`, {
+                  body: newMsg.text,
+                  icon: '/favicon.ico'
+                });
+              }
             }
           }
           return msgs;
