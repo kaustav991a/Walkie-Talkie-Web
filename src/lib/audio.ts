@@ -4,6 +4,7 @@ export class AudioEngine {
   individualGain: GainNode | null = null;
   analyser: AnalyserNode | null = null;
   sources: Map<string, MediaStreamAudioSourceNode> = new Map();
+  audioElements: Map<string, HTMLAudioElement> = new Map();
 
   init() {
     if (this.ctx) return;
@@ -31,6 +32,14 @@ export class AudioEngine {
     }
 
     try {
+      // Workaround for Chrome WebRTC + Web Audio API bug:
+      // The stream must be attached to an HTMLAudioElement or it won't play through the AudioContext
+      const audio = new Audio();
+      audio.muted = true;
+      audio.srcObject = stream;
+      audio.play().catch(e => console.warn("Audio play failed", e));
+      this.audioElements.set(id, audio);
+
       const source = this.ctx!.createMediaStreamSource(stream);
       source.connect(isTeam ? this.teamGain! : this.individualGain!);
       this.sources.set(id, source);
@@ -44,6 +53,12 @@ export class AudioEngine {
     if (source) {
       source.disconnect();
       this.sources.delete(id);
+    }
+    
+    const audio = this.audioElements.get(id);
+    if (audio) {
+      audio.srcObject = null;
+      this.audioElements.delete(id);
     }
   }
 

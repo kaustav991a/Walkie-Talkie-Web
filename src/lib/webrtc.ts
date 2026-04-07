@@ -1,11 +1,12 @@
 import { audioEngine } from './audio';
 import { db } from '../firebase';
-import { collection, addDoc, onSnapshot, query, where, serverTimestamp, orderBy } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, where, orderBy } from 'firebase/firestore';
 
 export class WebRTCManager {
   userId: string;
   localStream: MediaStream | null = null;
   peers: Map<string, RTCPeerConnection> = new Map();
+  pendingCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
   onUserTalking: (userId: string, isTalking: boolean, target: string) => void;
   unsubSignals: (() => void) | null = null;
 
@@ -60,24 +61,47 @@ export class WebRTCManager {
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             this.sendSignal(senderId, 'answer', JSON.stringify(answer));
+            this.processPendingCandidates(senderId, pc);
           } else if (data.type === 'answer') {
             const pc = this.peers.get(senderId);
             if (pc) {
               await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.data)));
+              this.processPendingCandidates(senderId, pc);
             }
           } else if (data.type === 'candidate') {
             const pc = this.peers.get(senderId);
             if (pc) {
-              try {
-                await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(data.data)));
-              } catch (e) {
-                console.error("Error adding received ice candidate", e);
+              if (pc.remoteDescription) {
+                try {
+                  await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(data.data)));
+                } catch (e) {
+                  console.error("Error adding received ice candidate", e);
+                }
+              } else {
+                if (!this.pendingCandidates.has(senderId)) {
+                  this.pendingCandidates.set(senderId, []);
+                }
+                this.pendingCandidates.get(senderId)!.push(JSON.parse(data.data));
               }
             }
           }
         }
       });
     });
+  }
+
+  private async processPendingCandidates(userId: string, pc: RTCPeerConnection) {
+    const candidates = this.pendingCandidates.get(userId);
+    if (candidates) {
+      for (const candidate of candidates) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error("Error adding pending ice candidate", e);
+        }
+      }
+      this.pendingCandidates.delete(userId);
+    }
   }
 
   private async sendSignal(receiverId: string, type: 'offer' | 'answer' | 'candidate', data: string) {
@@ -87,7 +111,7 @@ export class WebRTCManager {
         receiverId,
         type,
         data,
-        timestamp: serverTimestamp()
+        timestamp: Date.now() // Use Date.now() instead of serverTimestamp to avoid null sorting issues
       });
     } catch (e) {
       console.error("Error sending signal", e);
@@ -109,6 +133,7 @@ export class WebRTCManager {
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
       ]
     });
 
@@ -146,6 +171,7 @@ export class WebRTCManager {
     if (pc) {
       pc.close();
       this.peers.delete(targetUserId);
+      this.pendingCandidates.delete(targetUserId);
       audioEngine.removeStream(targetUserId);
     }
   }
@@ -154,5 +180,6 @@ export class WebRTCManager {
     if (this.unsubSignals) this.unsubSignals();
     this.peers.forEach(pc => pc.close());
     this.peers.clear();
+    this.pendingCandidates.clear();
   }
 }
