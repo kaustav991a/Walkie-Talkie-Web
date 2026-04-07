@@ -13,8 +13,8 @@ async function startServer() {
   });
   const PORT = 3000;
 
-  // Simple File-Based Database for Users
-  const DB_FILE = path.join(process.cwd(), 'users_db.json');
+  // Simple File-Based Database for Users (using /tmp for Cloud Run compatibility)
+  const DB_FILE = path.join('/tmp', 'users_db.json');
   
   // Load users from disk or initialize empty
   let registeredUsers: Record<string, any> = {};
@@ -27,7 +27,11 @@ async function startServer() {
   }
 
   const saveUsers = () => {
-    fs.writeFileSync(DB_FILE, JSON.stringify(registeredUsers, null, 2));
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(registeredUsers, null, 2));
+    } catch (e) {
+      console.error("Failed to save users DB", e);
+    }
   };
 
   // API Routes for Auth

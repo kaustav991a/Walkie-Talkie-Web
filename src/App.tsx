@@ -75,8 +75,9 @@ export default function App() {
       setUserId(data.user.id);
       setUsername(data.user.username);
       setJoined(true);
-    } catch (e) {
-      setAuthError('Network error');
+    } catch (e: any) {
+      console.error("Auth error:", e);
+      setAuthError(e.message || 'Network error');
     }
   };
 
