@@ -102,7 +102,10 @@ export class WebRTCManager {
   }
 
   public connectToPeer(targetUserId: string, targetPeerId: string) {
-    if (!this.peer || !this.localStream) return;
+    if (!this.peer || this.peer.disconnected || this.peer.destroyed || !this.localStream) {
+      console.warn(`Cannot connect to ${targetUserId}: Peer is disconnected or destroyed.`);
+      return;
+    }
     if (this.calls.has(targetUserId)) return;
 
     console.log(`Initiating call to ${targetUserId} (${targetPeerId})`);

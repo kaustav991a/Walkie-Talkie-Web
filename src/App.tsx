@@ -291,6 +291,7 @@ export default function App() {
       if (unsubUsers) unsubUsers();
       if (unsubMessages) unsubMessages();
       manager.disconnect();
+      setRtcManager(null);
       cancelAnimationFrame(requestRef.current!);
     };
   }, [joined, userId, username, isAuthReady, forceRelay]); // Added forceRelay to dependencies
