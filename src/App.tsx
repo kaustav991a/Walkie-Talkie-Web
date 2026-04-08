@@ -14,6 +14,7 @@ interface UserState {
   target: string;
   lastSeen?: number;
   sessionId?: string;
+  peerId?: string;
 }
 
 interface ChatMessage {
@@ -37,11 +38,16 @@ export default function App() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(
     'Notification' in window && Notification.permission === 'granted'
   );
+  const notificationsEnabledRef = useRef(notificationsEnabled);
+  useEffect(() => {
+    notificationsEnabledRef.current = notificationsEnabled;
+  }, [notificationsEnabled]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [micError, setMicError] = useState<string>('');
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
+  const [forceRelay, setForceRelay] = useState(false);
   const [connectionStates, setConnectionStates] = useState<Record<string, string>>({});
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   
@@ -120,9 +126,18 @@ export default function App() {
     let unsubMessages: (() => void) | undefined;
     let presenceInterval: any;
 
-    const manager = new WebRTCManager(userId, sessionId, () => {}, (uid, state) => {
-      setConnectionStates(prev => ({ ...prev, [uid]: state }));
-    });
+    const manager = new WebRTCManager(
+      userId, 
+      forceRelay, 
+      async (peerId) => {
+        // Update Firestore with our peerId
+        const userRef = doc(db, 'users', userId);
+        await setDoc(userRef, { peerId }, { merge: true });
+      },
+      (uid, state) => {
+        setConnectionStates(prev => ({ ...prev, [uid]: state }));
+      }
+    );
     setRtcManager(manager);
 
     const init = async () => {
@@ -133,6 +148,8 @@ export default function App() {
       } else {
         setMicError("Microphone access denied. You can still use text chat.");
       }
+      
+      manager.startSignaling();
 
       // 2. Update own presence
       const userRef = doc(db, 'users', userId);
@@ -181,11 +198,9 @@ export default function App() {
               isTalking,
               target,
               lastSeen: data.lastSeen,
-              sessionId: data.sessionId
+              sessionId: data.sessionId,
+              peerId: data.peerId
             });
-
-            // Connect WebRTC if not connected
-            manager.connectToPeer(data.uid, data.sessionId);
 
             const shouldHear = isTalking && (target === 'team' || target === userId);
             const isTeamStream = target === 'team';
@@ -200,7 +215,7 @@ export default function App() {
 
             // Desktop Notification Logic for Voice (Removed document.hidden so it's easier to test)
             if (isTalking && (!prevUser || !prevUser.isTalking) && shouldHear) {
-              if (notificationsEnabled) {
+              if (notificationsEnabledRef.current) {
                 if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
                   navigator.serviceWorker.ready.then(reg => {
                     reg.showNotification(`Incoming Transmission`, {
@@ -221,6 +236,8 @@ export default function App() {
           audioEngine.duckTeam(shouldDuck);
           return newMap;
         });
+      }, (error) => {
+        console.error("Users onSnapshot error:", error);
       });
 
       // 4. Listen to Messages
@@ -242,7 +259,7 @@ export default function App() {
         
         setMessages(prev => {
           // Check for new messages for notifications (Removed document.hidden so it's easier to test)
-          if (notificationsEnabled && msgs.length > prev.length && prev.length > 0) {
+          if (notificationsEnabledRef.current && msgs.length > prev.length && prev.length > 0) {
             const newMsg = msgs[msgs.length - 1];
             if (newMsg.senderId !== userId) {
               if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -262,6 +279,8 @@ export default function App() {
           }
           return msgs;
         });
+      }, (error) => {
+        console.error("Messages onSnapshot error:", error);
       });
     };
 
@@ -274,7 +293,18 @@ export default function App() {
       manager.disconnect();
       cancelAnimationFrame(requestRef.current!);
     };
-  }, [joined, userId, username, isAuthReady, notificationsEnabled]);
+  }, [joined, userId, username, isAuthReady, forceRelay]); // Added forceRelay to dependencies
+
+  // Auto-connect to new peers
+  useEffect(() => {
+    if (!rtcManager || !userId) return;
+    
+    users.forEach((user) => {
+      if (user.id !== userId && user.peerId && userId < user.id) {
+        rtcManager.connectToPeer(user.id, user.peerId);
+      }
+    });
+  }, [users, rtcManager, userId]);
 
   // Global Hotkey (Spacebar) for PTT
   useEffect(() => {
@@ -546,6 +576,18 @@ export default function App() {
                 {micError}
               </span>
             )}
+            <button
+              onClick={() => setForceRelay(!forceRelay)}
+              className={cn(
+                "ml-4 px-3 py-1 rounded text-xs font-medium border transition-colors",
+                forceRelay 
+                  ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30" 
+                  : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700"
+              )}
+              title="Forces audio through a secure relay server. Use this if you are on a strict corporate network and connections are failing."
+            >
+              {forceRelay ? 'Corporate Firewall Mode: ON' : 'Corporate Firewall Mode: OFF'}
+            </button>
           </div>
           
           {/* "Tray" Indicator Simulation */}

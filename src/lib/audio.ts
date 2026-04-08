@@ -6,30 +6,35 @@ export class AudioEngine {
   activeStates: Map<string, boolean> = new Map();
   isDucking: boolean = false;
 
-  init() {
-    if (this.ctx) return;
-    
-    // Web Audio API requires user interaction to start in some browsers
-    this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 256;
+  isInitialized: boolean = false;
 
-    // Anti-throttling: Keep AudioContext alive with a nearly silent oscillator
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    gain.gain.value = 0.0001; // Inaudible
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-    osc.start();
+  init() {
+    if (!this.ctx) {
+      // Web Audio API requires user interaction to start in some browsers
+      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      this.analyser = this.ctx.createAnalyser();
+      this.analyser.fftSize = 256;
+
+      // Anti-throttling: Keep AudioContext alive with a nearly silent oscillator
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0.0001; // Inaudible
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+    }
 
     // Set MediaSession to prevent background throttling
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'playing';
     }
 
+    if (this.isInitialized) return;
+
     const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
 
     // Pre-create audio elements during user interaction to bypass background autoplay restrictions
+    let unlockedCount = 0;
     for (let i = 0; i < 15; i++) {
       const audio = new Audio();
       audio.muted = true;
@@ -39,15 +44,24 @@ export class AudioEngine {
       
       // Unlock the audio element for future background playback with a silent WAV
       audio.src = silentWav;
+      
+      // Push to pool first
+      this.audioPool.push(audio);
+      
       audio.play().then(() => {
         audio.pause();
         audio.src = '';
         audio.srcObject = null;
+        unlockedCount++;
+        if (unlockedCount === 15) {
+          this.isInitialized = true;
+        }
       }).catch(e => {
         // Ignore autoplay errors here, they just mean we didn't have a strong enough user gesture yet
+        // We will try again on the next interaction
+        audio.remove();
+        this.audioPool = this.audioPool.filter(a => a !== audio);
       });
-      
-      this.audioPool.push(audio);
     }
   }
 

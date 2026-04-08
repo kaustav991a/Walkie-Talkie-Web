@@ -1,29 +1,26 @@
+import { Peer, MediaConnection } from 'peerjs';
 import { audioEngine } from './audio';
-import { db } from '../firebase';
-import { collection, addDoc, onSnapshot, query, where, orderBy } from 'firebase/firestore';
 
 export class WebRTCManager {
   userId: string;
-  sessionId: string;
+  forceRelay: boolean;
   localStream: MediaStream | null = null;
-  peers: Map<string, RTCPeerConnection> = new Map();
-  peerSessionIds: Map<string, string> = new Map();
-  pendingCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
-  onUserTalking: (userId: string, isTalking: boolean, target: string) => void;
+  peer: Peer | null = null;
+  calls: Map<string, MediaConnection> = new Map();
+  
+  onPeerId: (peerId: string) => void;
   onConnectionStateChange?: (userId: string, state: string) => void;
-  unsubSignals: (() => void) | null = null;
 
   constructor(
-    userId: string, 
-    sessionId: string, 
-    onUserTalking: (userId: string, isTalking: boolean, target: string) => void,
+    userId: string,
+    forceRelay: boolean,
+    onPeerId: (peerId: string) => void,
     onConnectionStateChange?: (userId: string, state: string) => void
   ) {
     this.userId = userId;
-    this.sessionId = sessionId;
-    this.onUserTalking = onUserTalking;
+    this.forceRelay = forceRelay;
+    this.onPeerId = onPeerId;
     this.onConnectionStateChange = onConnectionStateChange;
-    this.setupSignaling();
   }
 
   async initializeLocalStream() {
@@ -49,205 +46,119 @@ export class WebRTCManager {
     }
   }
 
-  private setupSignaling() {
-    const q = query(
-      collection(db, 'signals'),
-      where('receiverId', '==', this.userId),
-      orderBy('timestamp', 'asc')
-    );
-
-    this.unsubSignals = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach(async (change) => {
-        if (change.type === 'added') {
-          const data = change.doc.data();
-          
-          // Ignore signals meant for a previous session of ours!
-          if (data.receiverSessionId && data.receiverSessionId !== this.sessionId) return;
-
-          const senderId = data.senderId;
-          
-          if (data.type === 'offer') {
-            let pc = this.peers.get(senderId);
-            if (!pc) {
-              pc = this.createPeerConnection(senderId);
-            }
-            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.data)));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            this.sendSignal(senderId, 'answer', JSON.stringify(answer));
-            this.processPendingCandidates(senderId, pc);
-          } else if (data.type === 'answer') {
-            const pc = this.peers.get(senderId);
-            if (pc) {
-              await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.data)));
-              this.processPendingCandidates(senderId, pc);
-            }
-          } else if (data.type === 'candidate') {
-            const pc = this.peers.get(senderId);
-            if (pc && pc.remoteDescription) {
-              try {
-                await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(data.data)));
-              } catch (e) {
-                console.error("Error adding received ice candidate", e);
-              }
-            } else {
-              if (!this.pendingCandidates.has(senderId)) {
-                this.pendingCandidates.set(senderId, []);
-              }
-              this.pendingCandidates.get(senderId)!.push(JSON.parse(data.data));
-            }
-          }
-        }
-      });
-    });
-  }
-
-  private async processPendingCandidates(userId: string, pc: RTCPeerConnection) {
-    const candidates = this.pendingCandidates.get(userId);
-    if (candidates) {
-      for (const candidate of candidates) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.error("Error adding pending ice candidate", e);
-        }
+  public startSignaling() {
+    const iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:openrelay.metered.ca:80' },
+      {
+        urls: [
+          'turn:openrelay.metered.ca:80',
+          'turn:openrelay.metered.ca:443',
+          'turn:openrelay.metered.ca:443?transport=tcp',
+          'turns:openrelay.metered.ca:443?transport=tcp'
+        ],
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
       }
-      this.pendingCandidates.delete(userId);
-    }
-  }
+    ];
 
-  private async sendSignal(receiverId: string, type: 'offer' | 'answer' | 'candidate', data: string) {
-    const receiverSessionId = this.peerSessionIds.get(receiverId);
-    try {
-      await addDoc(collection(db, 'signals'), {
-        senderId: this.userId,
-        receiverId,
-        receiverSessionId: receiverSessionId || '',
-        type,
-        data,
-        timestamp: Date.now() // Use Date.now() instead of serverTimestamp to avoid null sorting issues
-      });
-    } catch (e) {
-      console.error("Error sending signal", e);
-    }
-  }
-
-  public connectToPeer(targetUserId: string, targetSessionId: string) {
-    this.peerSessionIds.set(targetUserId, targetSessionId);
-    if (!this.peers.has(targetUserId)) {
-      // Only the lexicographically smaller ID initiates the offer to avoid glare
-      if (this.userId < targetUserId) {
-        this.createPeerConnection(targetUserId, true);
-      } else {
-        this.createPeerConnection(targetUserId, false);
-      }
-    }
-  }
-
-  private createPeerConnection(targetUserId: string, isInitiator: boolean = false) {
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        // Google's public STUN servers (for normal NAT traversal)
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        // Free public TURN server (OpenRelay by Metered) for strict firewalls / symmetric NATs
-        {
-          urls: [
-            'turn:openrelay.metered.ca:80',
-            'turn:openrelay.metered.ca:443',
-            'turn:openrelay.metered.ca:443?transport=tcp',
-            'turns:openrelay.metered.ca:443?transport=tcp'
-          ],
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        }
-      ]
+    this.peer = new Peer({
+      config: {
+        iceTransportPolicy: this.forceRelay ? 'relay' : 'all',
+        iceServers: iceServers
+      },
+      debug: 2
     });
 
-    this.peers.set(targetUserId, pc);
+    this.peer.on('open', (id) => {
+      console.log('Connected to PeerJS server. My Peer ID:', id);
+      this.onPeerId(id);
+    });
 
-    let checkingTimeout: any;
-
-    pc.oniceconnectionstatechange = () => {
-      if (this.onConnectionStateChange) {
-        this.onConnectionStateChange(targetUserId, pc.iceConnectionState);
+    this.peer.on('call', (call) => {
+      const callerId = call.metadata?.callerId;
+      if (!callerId) {
+        console.warn("Incoming call missing callerId metadata, rejecting.");
+        call.close();
+        return;
       }
       
-      if (pc.iceConnectionState === 'checking') {
-        // If stuck in checking for 15 seconds, force a reconnect
-        checkingTimeout = setTimeout(() => {
-          if (pc.iceConnectionState === 'checking') {
-            console.log(`ICE connection stuck in checking with ${targetUserId}, forcing reconnect`);
-            this.removePeerConnection(targetUserId);
-            setTimeout(() => {
-              const targetSessionId = this.peerSessionIds.get(targetUserId);
-              if (targetSessionId) this.connectToPeer(targetUserId, targetSessionId);
-            }, 1000);
-          }
-        }, 15000);
+      console.log(`Receiving call from ${callerId}`);
+      
+      if (this.localStream) {
+        call.answer(this.localStream);
       } else {
-        clearTimeout(checkingTimeout);
+        call.answer();
       }
+      
+      this.handleCall(call, callerId);
+    });
 
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-        console.log(`ICE connection lost with ${targetUserId}`);
-        this.removePeerConnection(targetUserId);
-        
-        // Auto-reconnect after a short delay to handle spotty corporate networks
-        setTimeout(() => {
-          const targetSessionId = this.peerSessionIds.get(targetUserId);
-          if (targetSessionId) {
-            console.log(`Attempting to auto-reconnect to ${targetUserId}`);
-            this.connectToPeer(targetUserId, targetSessionId);
-          }
-        }, 2000);
-      }
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.sendSignal(targetUserId, 'candidate', JSON.stringify(event.candidate));
-      }
-    };
-
-    pc.ontrack = (event) => {
-      audioEngine.addStream(targetUserId, event.streams[0], true);
-    };
-
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => {
-        pc.addTrack(track, this.localStream!);
-      });
-    }
-
-    if (isInitiator) {
-      pc.createOffer().then(offer => {
-        return pc.setLocalDescription(offer);
-      }).then(() => {
-        this.sendSignal(targetUserId, 'offer', JSON.stringify(pc.localDescription));
-      });
-    }
-
-    return pc;
+    this.peer.on('error', (err) => {
+      console.error('PeerJS Error:', err);
+    });
   }
 
-  public removePeerConnection(targetUserId: string) {
-    const pc = this.peers.get(targetUserId);
-    if (pc) {
-      pc.close();
-      this.peers.delete(targetUserId);
-      this.pendingCandidates.delete(targetUserId);
-      audioEngine.removeStream(targetUserId);
+  public connectToPeer(targetUserId: string, targetPeerId: string) {
+    if (!this.peer || !this.localStream) return;
+    if (this.calls.has(targetUserId)) return;
+
+    console.log(`Initiating call to ${targetUserId} (${targetPeerId})`);
+    
+    const call = this.peer.call(targetPeerId, this.localStream, {
+      metadata: { callerId: this.userId }
+    });
+    
+    if (call) {
+      this.handleCall(call, targetUserId);
     }
+  }
+
+  private handleCall(call: MediaConnection, targetUserId: string) {
+    this.calls.set(targetUserId, call);
+
+    if (this.onConnectionStateChange) {
+      this.onConnectionStateChange(targetUserId, 'connecting');
+    }
+
+    call.on('stream', (remoteStream) => {
+      console.log(`Received stream from ${targetUserId}`);
+      audioEngine.addStream(targetUserId, remoteStream, true);
+      if (this.onConnectionStateChange) {
+        this.onConnectionStateChange(targetUserId, 'connected');
+      }
+    });
+
+    call.on('close', () => {
+      console.log(`Call closed with ${targetUserId}`);
+      this.calls.delete(targetUserId);
+      audioEngine.removeStream(targetUserId);
+      if (this.onConnectionStateChange) {
+        this.onConnectionStateChange(targetUserId, 'disconnected');
+      }
+    });
+
+    call.on('error', (err) => {
+      console.error(`Call error with ${targetUserId}:`, err);
+      this.calls.delete(targetUserId);
+      if (this.onConnectionStateChange) {
+        this.onConnectionStateChange(targetUserId, 'failed');
+      }
+    });
   }
 
   public disconnect() {
-    if (this.unsubSignals) this.unsubSignals();
-    this.peers.forEach(pc => pc.close());
-    this.peers.clear();
-    this.pendingCandidates.clear();
+    this.calls.forEach(call => call.close());
+    this.calls.clear();
+    if (this.peer) {
+      this.peer.destroy();
+      this.peer = null;
+    }
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream = null;
+    }
   }
 }
