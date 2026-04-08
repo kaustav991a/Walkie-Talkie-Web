@@ -149,6 +149,18 @@ export class WebRTCManager {
     });
   }
 
+  public removePeerConnection(targetUserId: string) {
+    const call = this.calls.get(targetUserId);
+    if (call) {
+      call.close();
+      this.calls.delete(targetUserId);
+    }
+    audioEngine.removeStream(targetUserId);
+    if (this.onConnectionStateChange) {
+      this.onConnectionStateChange(targetUserId, 'disconnected');
+    }
+  }
+
   public disconnect() {
     this.calls.forEach(call => call.close());
     this.calls.clear();
