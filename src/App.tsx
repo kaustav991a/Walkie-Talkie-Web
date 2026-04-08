@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Mic, MicOff, Users, User, Bell, Settings, Radio, Send, MessageSquare } from 'lucide-react';
+import { Mic, MicOff, Users, User, Bell, BellOff, Settings, Radio, Send, MessageSquare } from 'lucide-react';
 import { WebRTCManager } from './lib/webrtc';
 import { audioEngine } from './lib/audio';
 import { cn } from './lib/utils';
@@ -357,10 +357,16 @@ export default function App() {
 
     ctx.clearRect(0, 0, width, height);
 
-    const isAnyoneTalking = Array.from(users.values()).some(u => u.isTalking) || isPTTActive;
+    const isIncomingPrivate = Array.from(users.values()).some(u => u.isTalking && u.target === userId);
+    const isIncomingTeam = Array.from(users.values()).some(u => u.isTalking && u.target === 'team');
+    const isAnyoneTalking = isIncomingPrivate || isIncomingTeam || isPTTActive;
     
     ctx.lineWidth = 3;
-    ctx.strokeStyle = isPTTActive ? '#ef4444' : (isAnyoneTalking ? '#10b981' : '#3f3f46');
+    ctx.strokeStyle = isPTTActive && activeTarget === 'team' ? '#10b981' : // Green for transmitting team
+                      isPTTActive && activeTarget !== 'team' ? '#a855f7' : // Purple for transmitting private
+                      isIncomingPrivate ? '#a855f7' : // Purple for receiving private
+                      isIncomingTeam ? '#10b981' : // Green for receiving team
+                      '#3f3f46'; // Gray for idle
     ctx.shadowBlur = isAnyoneTalking ? 15 : 0;
     ctx.shadowColor = ctx.strokeStyle;
 
@@ -530,7 +536,10 @@ export default function App() {
                 {/* Status Indicator */}
                 <div className={cn(
                   "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-zinc-900 transition-colors",
-                  user.isTalking ? "bg-emerald-500 animate-pulse" : "bg-zinc-500"
+                  user.isTalking && user.target === userId ? "bg-purple-500 animate-pulse shadow-[0_0_8px_rgba(168,85,247,0.8)]" :
+                  user.isTalking && user.target === 'team' ? "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]" :
+                  user.isTalking ? "bg-blue-500" :
+                  "bg-zinc-600"
                 )} />
               </div>
               <div className="flex-1 text-left truncate">
@@ -545,16 +554,20 @@ export default function App() {
                       }
                     }}
                     className={cn(
-                      "w-2 h-2 rounded-full cursor-pointer hover:scale-150 transition-transform",
-                      connectionStates[user.id] === 'connected' || connectionStates[user.id] === 'completed' ? "bg-emerald-500" :
-                      connectionStates[user.id] === 'failed' || connectionStates[user.id] === 'disconnected' ? "bg-red-500" :
-                      "bg-yellow-500 animate-pulse"
+                      "w-2.5 h-2.5 rounded-full cursor-pointer hover:scale-150 transition-all",
+                      connectionStates[user.id] === 'connected' || connectionStates[user.id] === 'completed' ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]" :
+                      connectionStates[user.id] === 'connecting' ? "bg-yellow-500 animate-pulse shadow-[0_0_6px_rgba(234,179,8,0.8)]" :
+                      connectionStates[user.id] === 'failed' ? "bg-red-500 animate-bounce shadow-[0_0_6px_rgba(239,68,68,0.8)]" :
+                      "bg-zinc-600"
                     )} 
-                    title={`Connection: ${connectionStates[user.id] || 'connecting'}. Click to force reconnect.`} 
+                    title={`Connection: ${connectionStates[user.id] || 'disconnected'}. Click to force reconnect.`} 
                   />
                 </div>
-                <div className="text-xs text-zinc-500 truncate">
-                  {user.isTalking ? 'Transmitting...' : 'Idle'}
+                <div className="text-xs truncate">
+                  {user.isTalking && user.target === userId ? <span className="text-purple-400 font-medium">Private Incoming...</span> :
+                   user.isTalking && user.target === 'team' ? <span className="text-emerald-400">Team Transmitting...</span> :
+                   user.isTalking ? <span className="text-blue-400">Busy...</span> : 
+                   <span className="text-zinc-500">Idle</span>}
                 </div>
               </div>
             </button>
@@ -570,6 +583,16 @@ export default function App() {
             <div className="font-medium text-sm text-zinc-200 truncate">{username}</div>
             <div className="text-xs text-emerald-500 cursor-pointer hover:underline" onClick={handleLogout}>Logout</div>
           </div>
+          <button 
+            onClick={requestNotifications}
+            className={cn(
+              "transition-colors",
+              notificationsEnabled ? "text-emerald-500 hover:text-emerald-400" : "text-zinc-500 hover:text-zinc-300"
+            )}
+            title={notificationsEnabled ? "Notifications Enabled" : "Enable Notifications"}
+          >
+            {notificationsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+          </button>
           <button className="text-zinc-500 hover:text-zinc-300 transition-colors">
             <Settings className="w-4 h-4" />
           </button>
@@ -581,8 +604,14 @@ export default function App() {
         {/* Top Bar */}
         <div className="h-16 border-b border-zinc-800 flex items-center px-6 justify-between bg-zinc-950/50 backdrop-blur-sm z-10">
           <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-medium text-zinc-200">
+            <div className={cn(
+              "w-2 h-2 rounded-full animate-pulse",
+              activeTarget === 'team' ? "bg-emerald-500" : "bg-purple-500"
+            )} />
+            <span className={cn(
+              "font-medium",
+              activeTarget === 'team' ? "text-zinc-200" : "text-purple-400"
+            )}>
               {activeTarget === 'team' ? 'Team Global Frequency' : `Private Channel: ${users.get(activeTarget)?.name}`}
             </span>
             {micError && (
@@ -607,16 +636,18 @@ export default function App() {
           {/* "Tray" Indicator Simulation */}
           <div className={cn(
             "px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-colors border",
-            isPTTActive 
-              ? "bg-red-500/10 text-red-500 border-red-500/20" 
-              : Array.from(users.values()).some(u => u.isTalking)
-                ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                : "bg-zinc-800 text-zinc-400 border-zinc-700"
+            isPTTActive && activeTarget === 'team' ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
+            isPTTActive && activeTarget !== 'team' ? "bg-purple-500/10 text-purple-400 border-purple-500/20" :
+            Array.from(users.values()).some(u => u.isTalking && u.target === userId) ? "bg-purple-500/10 text-purple-400 border-purple-500/20" :
+            Array.from(users.values()).some(u => u.isTalking && u.target === 'team') ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
+            "bg-zinc-800 text-zinc-400 border-zinc-700"
           )}>
             {isPTTActive ? (
-              <><Mic className="w-3 h-3" /> Transmitting</>
-            ) : Array.from(users.values()).some(u => u.isTalking) ? (
-              <><Radio className="w-3 h-3" /> Receiving</>
+              <><Mic className="w-3 h-3" /> Transmitting {activeTarget === 'team' ? 'Global' : 'Private'}</>
+            ) : Array.from(users.values()).some(u => u.isTalking && u.target === userId) ? (
+              <><Radio className="w-3 h-3" /> Receiving Private</>
+            ) : Array.from(users.values()).some(u => u.isTalking && u.target === 'team') ? (
+              <><Radio className="w-3 h-3" /> Receiving Global</>
             ) : (
               <><MicOff className="w-3 h-3" /> Standby</>
             )}
@@ -628,7 +659,11 @@ export default function App() {
           {/* Background Glow */}
           <div className={cn(
             "absolute inset-0 opacity-20 transition-opacity duration-500 blur-3xl",
-            isPTTActive ? "bg-red-500/20" : Array.from(users.values()).some(u => u.isTalking) ? "bg-emerald-500/20" : "bg-transparent"
+            isPTTActive && activeTarget === 'team' ? "bg-emerald-500/20" : 
+            isPTTActive && activeTarget !== 'team' ? "bg-purple-500/20" :
+            Array.from(users.values()).some(u => u.isTalking && u.target === userId) ? "bg-purple-500/20" :
+            Array.from(users.values()).some(u => u.isTalking && u.target === 'team') ? "bg-emerald-500/20" : 
+            "bg-transparent"
           )} />
           
           <canvas 
