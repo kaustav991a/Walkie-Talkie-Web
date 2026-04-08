@@ -87,6 +87,13 @@ export class WebRTCManager {
       
       console.log(`Receiving call from ${callerId}`);
       
+      const existingCall = this.calls.get(callerId);
+      if (existingCall && existingCall.peer !== call.peer) {
+        console.log(`Replacing existing call with ${callerId} due to new incoming call.`);
+        existingCall.close();
+        this.calls.delete(callerId);
+      }
+      
       if (this.localStream) {
         call.answer(this.localStream);
       } else {
@@ -99,6 +106,13 @@ export class WebRTCManager {
     this.peer.on('error', (err) => {
       console.error('PeerJS Error:', err);
     });
+
+    this.peer.on('disconnected', () => {
+      console.log('PeerJS disconnected from signaling server. Attempting to reconnect...');
+      if (this.peer && !this.peer.destroyed) {
+        this.peer.reconnect();
+      }
+    });
   }
 
   public connectToPeer(targetUserId: string, targetPeerId: string) {
@@ -106,7 +120,17 @@ export class WebRTCManager {
       console.warn(`Cannot connect to ${targetUserId}: Peer is disconnected or destroyed.`);
       return;
     }
-    if (this.calls.has(targetUserId)) return;
+    
+    const existingCall = this.calls.get(targetUserId);
+    if (existingCall) {
+      if (existingCall.peer === targetPeerId) {
+        return; // Already connected to this exact peer instance
+      } else {
+        console.log(`PeerId changed for ${targetUserId}. Closing old call.`);
+        existingCall.close();
+        this.calls.delete(targetUserId);
+      }
+    }
 
     console.log(`Initiating call to ${targetUserId} (${targetPeerId})`);
     
@@ -136,20 +160,51 @@ export class WebRTCManager {
 
     call.on('close', () => {
       console.log(`Call closed with ${targetUserId}`);
-      this.calls.delete(targetUserId);
-      audioEngine.removeStream(targetUserId);
-      if (this.onConnectionStateChange) {
-        this.onConnectionStateChange(targetUserId, 'disconnected');
+      if (this.calls.get(targetUserId) === call) {
+        this.calls.delete(targetUserId);
+        audioEngine.removeStream(targetUserId);
+        if (this.onConnectionStateChange) {
+          this.onConnectionStateChange(targetUserId, 'disconnected');
+        }
       }
     });
 
     call.on('error', (err) => {
       console.error(`Call error with ${targetUserId}:`, err);
-      this.calls.delete(targetUserId);
-      if (this.onConnectionStateChange) {
-        this.onConnectionStateChange(targetUserId, 'failed');
+      if (this.calls.get(targetUserId) === call) {
+        this.calls.delete(targetUserId);
+        if (this.onConnectionStateChange) {
+          this.onConnectionStateChange(targetUserId, 'failed');
+        }
       }
     });
+
+    // Monitor underlying WebRTC connection for accurate status
+    const checkPC = setInterval(() => {
+      if (call.peerConnection) {
+        clearInterval(checkPC);
+        
+        // Initial state check
+        const initialState = call.peerConnection.iceConnectionState;
+        if (initialState === 'connected' || initialState === 'completed') {
+          if (this.onConnectionStateChange) this.onConnectionStateChange(targetUserId, 'connected');
+        }
+
+        call.peerConnection.oniceconnectionstatechange = () => {
+          const state = call.peerConnection.iceConnectionState;
+          console.log(`ICE state for ${targetUserId}: ${state}`);
+          if (state === 'connected' || state === 'completed') {
+            if (this.onConnectionStateChange) {
+              this.onConnectionStateChange(targetUserId, 'connected');
+            }
+          } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+            if (this.onConnectionStateChange) {
+              this.onConnectionStateChange(targetUserId, 'disconnected');
+            }
+          }
+        };
+      }
+    }, 500);
   }
 
   public removePeerConnection(targetUserId: string) {

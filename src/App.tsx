@@ -533,12 +533,22 @@ export default function App() {
               <div className="flex-1 text-left truncate">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-sm truncate">{user.name}</span>
-                  <div className={cn(
-                    "w-2 h-2 rounded-full",
-                    connectionStates[user.id] === 'connected' || connectionStates[user.id] === 'completed' ? "bg-emerald-500" :
-                    connectionStates[user.id] === 'failed' || connectionStates[user.id] === 'disconnected' ? "bg-red-500" :
-                    "bg-yellow-500 animate-pulse"
-                  )} title={`Connection: ${connectionStates[user.id] || 'connecting'}`} />
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (rtcManager && user.peerId) {
+                        rtcManager.removePeerConnection(user.id);
+                        setTimeout(() => rtcManager.connectToPeer(user.id, user.peerId!), 500);
+                      }
+                    }}
+                    className={cn(
+                      "w-2 h-2 rounded-full cursor-pointer hover:scale-150 transition-transform",
+                      connectionStates[user.id] === 'connected' || connectionStates[user.id] === 'completed' ? "bg-emerald-500" :
+                      connectionStates[user.id] === 'failed' || connectionStates[user.id] === 'disconnected' ? "bg-red-500" :
+                      "bg-yellow-500 animate-pulse"
+                    )} 
+                    title={`Connection: ${connectionStates[user.id] || 'connecting'}. Click to force reconnect.`} 
+                  />
                 </div>
                 <div className="text-xs text-zinc-500 truncate">
                   {user.isTalking ? 'Transmitting...' : 'Idle'}
