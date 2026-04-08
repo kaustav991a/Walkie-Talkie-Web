@@ -5,6 +5,8 @@ export class AudioEngine {
   audioPool: HTMLAudioElement[] = [];
   activeStates: Map<string, boolean> = new Map();
   isDucking: boolean = false;
+  localSource: MediaStreamAudioSourceNode | null = null;
+  localGain: GainNode | null = null;
 
   isInitialized: boolean = false;
 
@@ -62,6 +64,34 @@ export class AudioEngine {
         audio.remove();
         this.audioPool = this.audioPool.filter(a => a !== audio);
       });
+    }
+  }
+
+  setLocalStream(stream: MediaStream | null) {
+    if (!this.ctx) this.init();
+    if (!this.ctx) return;
+
+    if (this.localSource) {
+      this.localSource.disconnect();
+      this.localSource = null;
+    }
+    if (this.localGain) {
+      this.localGain.disconnect();
+      this.localGain = null;
+    }
+
+    if (stream) {
+      this.localSource = this.ctx.createMediaStreamSource(stream);
+      this.localGain = this.ctx.createGain();
+      this.localGain.gain.value = 0; // Start muted
+      this.localSource.connect(this.localGain);
+      this.localGain.connect(this.analyser!);
+    }
+  }
+
+  setLocalMicActive(active: boolean) {
+    if (this.localGain) {
+      this.localGain.gain.value = active ? 1 : 0;
     }
   }
 

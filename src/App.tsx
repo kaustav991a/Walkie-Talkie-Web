@@ -143,8 +143,9 @@ export default function App() {
     const init = async () => {
       // 1. Initialize Microphone FIRST
       const micGranted = await manager.initializeLocalStream();
-      if (micGranted) {
+      if (micGranted && manager.localStream) {
         audioEngine.init();
+        audioEngine.setLocalStream(manager.localStream);
       } else {
         setMicError("Microphone access denied. You can still use text chat.");
       }
@@ -317,6 +318,7 @@ export default function App() {
         setIsPTTActive(true);
         audioEngine.resume();
         audioEngine.playAll();
+        audioEngine.setLocalMicActive(true);
         rtcManager.setLocalMicEnabled(true);
         setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
       }
@@ -326,6 +328,7 @@ export default function App() {
       if (e.code === 'Space' && e.target === document.body) {
         e.preventDefault();
         setIsPTTActive(false);
+        audioEngine.setLocalMicActive(false);
         rtcManager.setLocalMicEnabled(false);
         setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
       }
@@ -643,17 +646,20 @@ export default function App() {
               setIsPTTActive(true);
               audioEngine.resume();
               audioEngine.playAll();
+              audioEngine.setLocalMicActive(true);
               rtcManager?.setLocalMicEnabled(true);
               setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
             }}
             onMouseUp={() => {
               setIsPTTActive(false);
+              audioEngine.setLocalMicActive(false);
               rtcManager?.setLocalMicEnabled(false);
               setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
             }}
             onMouseLeave={() => {
               if (isPTTActive) {
                 setIsPTTActive(false);
+                audioEngine.setLocalMicActive(false);
                 rtcManager?.setLocalMicEnabled(false);
                 setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
               }
