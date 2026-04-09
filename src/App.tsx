@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Mic, MicOff, Users, User, Bell, Settings, Radio, Send, MessageSquare } from 'lucide-react';
+import { Mic, MicOff, Users, User, Bell, Settings, Radio, Send, MessageSquare, SignalHigh, SignalMedium, SignalLow, SignalZero } from 'lucide-react';
 import { WebRTCManager } from './lib/webrtc';
 import { audioEngine } from './lib/audio';
 import { cn } from './lib/utils';
@@ -49,6 +49,7 @@ export default function App() {
   const [hasInteracted, setHasInteracted] = useState(false);
   const [forceRelay, setForceRelay] = useState(false);
   const [connectionStates, setConnectionStates] = useState<Record<string, string>>({});
+  const [connectionQualities, setConnectionQualities] = useState<Record<string, 'excellent' | 'good' | 'poor' | 'unknown'>>({});
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -136,6 +137,9 @@ export default function App() {
       },
       (uid, state) => {
         setConnectionStates(prev => ({ ...prev, [uid]: state }));
+      },
+      (uid, quality) => {
+        setConnectionQualities(prev => ({ ...prev, [uid]: quality }));
       }
     );
     setRtcManager(manager);
@@ -316,8 +320,7 @@ export default function App() {
       if (e.code === 'Space' && !e.repeat && e.target === document.body) {
         e.preventDefault();
         setIsPTTActive(true);
-        audioEngine.resume();
-        audioEngine.playAll();
+        audioEngine.unlockAll();
         audioEngine.setLocalMicActive(true);
         rtcManager.setLocalMicEnabled(true);
         setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
@@ -505,7 +508,13 @@ export default function App() {
             </div>
             <div className="flex-1 text-left">
               <div className="font-medium text-sm">Team Global</div>
-              <div className="text-xs text-zinc-500">{users.size + 1} online</div>
+              <div className="text-xs text-zinc-500">
+                {Array.from(users.values()).some(u => u.isTalking && u.target === 'team') ? (
+                  <span className="text-emerald-500 animate-pulse">Receiving transmission...</span>
+                ) : (
+                  `${users.size + 1} online`
+                )}
+              </div>
             </div>
           </button>
 
@@ -530,31 +539,47 @@ export default function App() {
                 {/* Status Indicator */}
                 <div className={cn(
                   "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-zinc-900 transition-colors",
-                  user.isTalking ? "bg-emerald-500 animate-pulse" : "bg-zinc-500"
+                  user.isTalking 
+                    ? (user.target === 'team' || user.target === userId ? "bg-emerald-500 animate-pulse" : "bg-orange-500") 
+                    : "bg-zinc-500"
                 )} />
               </div>
               <div className="flex-1 text-left truncate">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-sm truncate">{user.name}</span>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (rtcManager && user.peerId) {
-                        rtcManager.removePeerConnection(user.id);
-                        setTimeout(() => rtcManager.connectToPeer(user.id, user.peerId!), 500);
-                      }
-                    }}
-                    className={cn(
-                      "w-2 h-2 rounded-full cursor-pointer hover:scale-150 transition-transform",
-                      connectionStates[user.id] === 'connected' || connectionStates[user.id] === 'completed' ? "bg-emerald-500" :
-                      connectionStates[user.id] === 'failed' || connectionStates[user.id] === 'disconnected' ? "bg-red-500" :
-                      "bg-yellow-500 animate-pulse"
-                    )} 
-                    title={`Connection: ${connectionStates[user.id] || 'connecting'}. Click to force reconnect.`} 
-                  />
+                  <div className="flex items-center gap-2">
+                    {/* Quality Indicator */}
+                    {connectionStates[user.id] === 'connected' && (
+                      <div className="text-zinc-500" title={`Quality: ${connectionQualities[user.id] || 'unknown'}`}>
+                        {connectionQualities[user.id] === 'excellent' && <SignalHigh className="w-3 h-3 text-emerald-500" />}
+                        {connectionQualities[user.id] === 'good' && <SignalMedium className="w-3 h-3 text-yellow-500" />}
+                        {connectionQualities[user.id] === 'poor' && <SignalLow className="w-3 h-3 text-orange-500" />}
+                        {(!connectionQualities[user.id] || connectionQualities[user.id] === 'unknown') && <SignalZero className="w-3 h-3 text-zinc-600" />}
+                      </div>
+                    )}
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (rtcManager && user.peerId) {
+                          rtcManager.removePeerConnection(user.id);
+                          setTimeout(() => rtcManager.connectToPeer(user.id, user.peerId!), 500);
+                        }
+                      }}
+                      className={cn(
+                        "w-2 h-2 rounded-full cursor-pointer hover:scale-150 transition-transform",
+                        connectionStates[user.id] === 'connected' || connectionStates[user.id] === 'completed' ? "bg-emerald-500" :
+                        connectionStates[user.id] === 'failed' || connectionStates[user.id] === 'disconnected' ? "bg-red-500" :
+                        "bg-yellow-500 animate-pulse"
+                      )} 
+                      title={`Connection: ${connectionStates[user.id] || 'connecting'}. Click to force reconnect.`} 
+                    />
+                  </div>
                 </div>
                 <div className="text-xs text-zinc-500 truncate">
-                  {user.isTalking ? 'Transmitting...' : 'Idle'}
+                  {user.isTalking 
+                    ? (user.target === 'team' ? 'Transmitting (Global)' : 
+                       user.target === userId ? 'Transmitting (Private)' : 'Busy') 
+                    : 'Idle'}
                 </div>
               </div>
             </button>
@@ -644,8 +669,7 @@ export default function App() {
           <button
             onMouseDown={() => {
               setIsPTTActive(true);
-              audioEngine.resume();
-              audioEngine.playAll();
+              audioEngine.unlockAll();
               audioEngine.setLocalMicActive(true);
               rtcManager?.setLocalMicEnabled(true);
               setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });

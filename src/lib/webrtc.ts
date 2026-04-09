@@ -10,17 +10,64 @@ export class WebRTCManager {
   
   onPeerId: (peerId: string) => void;
   onConnectionStateChange?: (userId: string, state: string) => void;
+  onConnectionQualityChange?: (userId: string, quality: 'excellent' | 'good' | 'poor' | 'unknown') => void;
+  onLocalStreamChange?: (stream: MediaStream) => void;
 
   constructor(
     userId: string,
     forceRelay: boolean,
     onPeerId: (peerId: string) => void,
-    onConnectionStateChange?: (userId: string, state: string) => void
+    onConnectionStateChange?: (userId: string, state: string) => void,
+    onConnectionQualityChange?: (userId: string, quality: 'excellent' | 'good' | 'poor' | 'unknown') => void,
+    onLocalStreamChange?: (stream: MediaStream) => void
   ) {
     this.userId = userId;
     this.forceRelay = forceRelay;
     this.onPeerId = onPeerId;
     this.onConnectionStateChange = onConnectionStateChange;
+    this.onConnectionQualityChange = onConnectionQualityChange;
+    this.onLocalStreamChange = onLocalStreamChange;
+    
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.addEventListener('devicechange', this.handleDeviceChange.bind(this));
+    }
+  }
+
+  async handleDeviceChange() {
+    console.log("Audio device change detected. Re-acquiring local stream...");
+    const oldStream = this.localStream;
+    const wasMuted = oldStream ? !oldStream.getAudioTracks()[0].enabled : true;
+    
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }, 
+        video: false 
+      });
+      
+      this.localStream = newStream;
+      const newAudioTrack = newStream.getAudioTracks()[0];
+      newAudioTrack.enabled = !wasMuted;
+
+      // Replace track in all active calls
+      this.calls.forEach(call => {
+        if (call.peerConnection) {
+          const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'audio');
+          if (sender) {
+            sender.replaceTrack(newAudioTrack).catch(e => console.error("Failed to replace track", e));
+          }
+        }
+      });
+
+      if (this.onLocalStreamChange) {
+        this.onLocalStreamChange(newStream);
+      }
+    } catch (e) {
+      console.error("Failed to re-acquire stream on device change", e);
+    }
   }
 
   async initializeLocalStream() {
@@ -29,7 +76,14 @@ export class WebRTCManager {
         console.warn("getUserMedia is not supported in this browser.");
         return false;
       }
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      this.localStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }, 
+        video: false 
+      });
       this.setLocalMicEnabled(false);
       return true;
     } catch (err) {
@@ -170,6 +224,7 @@ export class WebRTCManager {
     });
 
     call.on('error', (err) => {
+      clearInterval(checkPC);
       console.error(`Call error with ${targetUserId}:`, err);
       if (this.calls.get(targetUserId) === call) {
         this.calls.delete(targetUserId);
@@ -179,15 +234,49 @@ export class WebRTCManager {
       }
     });
 
-    // Monitor underlying WebRTC connection for accurate status
-    const checkPC = setInterval(() => {
+    // Monitor underlying WebRTC connection for accurate status and quality
+    const checkPC = setInterval(async () => {
       if (call.peerConnection) {
-        clearInterval(checkPC);
-        
         // Initial state check
         const initialState = call.peerConnection.iceConnectionState;
         if (initialState === 'connected' || initialState === 'completed') {
           if (this.onConnectionStateChange) this.onConnectionStateChange(targetUserId, 'connected');
+          
+          // Check Stats for Quality
+          try {
+            const stats = await call.peerConnection.getStats();
+            let rtt = 0;
+            let packetsLost = 0;
+            let packetsReceived = 0;
+            
+            stats.forEach(report => {
+              if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                rtt = report.currentRoundTripTime || report.roundTripTime || 0;
+              }
+              if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                packetsLost = report.packetsLost || 0;
+                packetsReceived = report.packetsReceived || 0;
+              }
+            });
+
+            let quality: 'excellent' | 'good' | 'poor' | 'unknown' = 'unknown';
+            if (rtt > 0) {
+              if (rtt < 0.1) quality = 'excellent'; // < 100ms
+              else if (rtt < 0.3) quality = 'good'; // < 300ms
+              else quality = 'poor';
+            } else if (packetsReceived > 0) {
+               const lossRate = packetsLost / (packetsLost + packetsReceived);
+               if (lossRate < 0.02) quality = 'excellent';
+               else if (lossRate < 0.05) quality = 'good';
+               else quality = 'poor';
+            }
+            
+            if (this.onConnectionQualityChange) {
+              this.onConnectionQualityChange(targetUserId, quality);
+            }
+          } catch (e) {
+            // Ignore stats errors
+          }
         }
 
         call.peerConnection.oniceconnectionstatechange = () => {
@@ -201,10 +290,13 @@ export class WebRTCManager {
             if (this.onConnectionStateChange) {
               this.onConnectionStateChange(targetUserId, 'disconnected');
             }
+            if (this.onConnectionQualityChange) {
+              this.onConnectionQualityChange(targetUserId, 'unknown');
+            }
           }
         };
       }
-    }, 500);
+    }, 2000);
   }
 
   public removePeerConnection(targetUserId: string) {

@@ -60,9 +60,10 @@ export class AudioEngine {
         }
       }).catch(e => {
         // Ignore autoplay errors here, they just mean we didn't have a strong enough user gesture yet
-        // We will try again on the next interaction
-        audio.remove();
-        this.audioPool = this.audioPool.filter(a => a !== audio);
+        // We will try again on the next interaction. DO NOT remove from pool.
+        audio.pause();
+        audio.src = '';
+        audio.srcObject = null;
       });
     }
   }
@@ -162,6 +163,29 @@ export class AudioEngine {
       }
       this.updateVolumes();
     }
+  }
+
+  unlockAll() {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+    
+    // Try to unlock any audio elements that haven't been used yet
+    const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+    this.audioPool.forEach(audio => {
+      if (!audio.srcObject && !audio.src) {
+        audio.src = silentWav;
+        audio.play().then(() => {
+          audio.pause();
+          audio.src = '';
+        }).catch(() => {
+          audio.src = '';
+        });
+      }
+    });
+
+    // Also try to play any active streams that might have been blocked
+    this.playAll();
   }
 
   playAll() {
