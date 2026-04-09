@@ -175,7 +175,15 @@ export default function App() {
       unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
         setUsers(prev => {
           const newMap = new Map(prev);
-          let shouldDuck = false;
+          
+          // First pass: determine if we are currently receiving a private transmission
+          let isReceivingPrivate = false;
+          snapshot.docs.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.uid !== userId && data.isTalking && data.target === userId) {
+              isReceivingPrivate = true;
+            }
+          });
 
           snapshot.docs.forEach(docSnap => {
             const data = docSnap.data();
@@ -207,16 +215,19 @@ export default function App() {
               peerId: data.peerId
             });
 
-            const shouldHear = isTalking && (target === 'team' || target === userId);
             const isTeamStream = target === 'team';
+            
+            // PRIORITY OVERRIDE LOGIC:
+            // We hear the stream if:
+            // 1. It is a private transmission directed at us.
+            // 2. It is a global transmission AND we are NOT currently receiving a private transmission.
+            const shouldHear = isTalking && (
+              target === userId || 
+              (target === 'team' && !isReceivingPrivate)
+            );
 
             // Update Audio Engine
             audioEngine.setStreamActive(data.uid, shouldHear, isTeamStream);
-
-            // Audio Ducking Logic
-            if (isTalking && target === userId) {
-              shouldDuck = true;
-            }
 
             // Desktop Notification Logic for Voice (Removed document.hidden so it's easier to test)
             if (isTalking && (!prevUser || !prevUser.isTalking) && shouldHear) {
@@ -238,7 +249,6 @@ export default function App() {
             }
           });
 
-          audioEngine.duckTeam(shouldDuck);
           return newMap;
         });
       }, (error) => {
@@ -431,6 +441,8 @@ export default function App() {
     (m.senderId === activeTarget && m.target === userId)
   );
 
+  const isReceivingPrivate = Array.from(users.values()).some(u => u.isTalking && u.target === userId);
+
   if (!isAuthReady) {
     return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500">Loading...</div>;
   }
@@ -509,7 +521,9 @@ export default function App() {
             <div className="flex-1 text-left">
               <div className="font-medium text-sm">Team Global</div>
               <div className="text-xs text-zinc-500">
-                {Array.from(users.values()).some(u => u.isTalking && u.target === 'team') ? (
+                {isReceivingPrivate ? (
+                  <span className="text-orange-500">Muted (Priority Override)</span>
+                ) : Array.from(users.values()).some(u => u.isTalking && u.target === 'team') ? (
                   <span className="text-emerald-500 animate-pulse">Receiving transmission...</span>
                 ) : (
                   `${users.size + 1} online`
