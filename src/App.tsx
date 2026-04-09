@@ -509,10 +509,13 @@ export default function App() {
 
   return (
     <div className="h-[100dvh] bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden relative w-full">
-      {/* Mobile Backdrop */}
-      {mobileView !== 'ptt' && (
+      {/* Backdrop for Mobile Channels OR Chat on any screen */}
+      {(mobileView === 'channels' || mobileView === 'chat') && (
         <div 
-          className="md:hidden fixed inset-0 bg-black/60 z-40 backdrop-blur-sm"
+          className={cn(
+            "fixed inset-0 bg-black/60 z-40 backdrop-blur-sm",
+            mobileView === 'channels' ? "md:hidden" : ""
+          )}
           onClick={() => setMobileView('ptt')}
         />
       )}
@@ -723,8 +726,8 @@ export default function App() {
             </div>
 
             <button 
-              onClick={() => setMobileView('chat')} 
-              className="md:hidden p-2 -mr-2 text-zinc-400 hover:text-white relative shrink-0"
+              onClick={() => setMobileView(mobileView === 'chat' ? 'ptt' : 'chat')} 
+              className="p-2 -mr-2 text-zinc-400 hover:text-white relative shrink-0"
             >
               <MessageSquare className="w-5 h-5" />
             </button>
@@ -812,8 +815,8 @@ export default function App() {
 
       {/* Right Sidebar: Chat */}
       <div className={cn(
-        "bg-zinc-900 border-l border-zinc-800 flex flex-col h-full absolute right-0 md:relative z-50 transition-transform duration-300 w-[85vw] sm:w-80 shrink-0",
-        mobileView === 'chat' ? "translate-x-0" : "translate-x-full md:translate-x-0"
+        "bg-zinc-900 border-l border-zinc-800 flex flex-col h-full absolute right-0 z-50 transition-transform duration-300 w-[85vw] sm:w-80 shrink-0",
+        mobileView === 'chat' ? "translate-x-0 shadow-2xl" : "translate-x-full"
       )}>
         <div className="h-16 border-b border-zinc-800 flex items-center px-4 justify-between">
           <div className="flex items-center gap-2 min-w-0">
@@ -824,7 +827,7 @@ export default function App() {
           </div>
           <button 
             onClick={() => setMobileView('ptt')}
-            className="md:hidden p-1.5 text-zinc-400 hover:text-white rounded-md hover:bg-zinc-800 shrink-0"
+            className="p-1.5 text-zinc-400 hover:text-white rounded-md hover:bg-zinc-800 shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
