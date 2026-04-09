@@ -479,7 +479,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden relative w-full">
+    <div className="h-[100dvh] bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden relative w-full">
       {/* Mobile Backdrop */}
       {mobileView !== 'ptt' && (
         <div 
@@ -501,7 +501,7 @@ export default function App() {
 
       {/* Sidebar: DMs and Team */}
       <div className={cn(
-        "bg-zinc-900 border-r border-zinc-800 flex flex-col h-full absolute md:relative z-50 transition-transform duration-300 w-72 md:w-64 shrink-0",
+        "bg-zinc-900 border-r border-zinc-800 flex flex-col h-full absolute left-0 md:relative z-50 transition-transform duration-300 w-[85vw] sm:w-72 md:w-64 shrink-0",
         mobileView === 'channels' ? "translate-x-0" : "-translate-x-full md:translate-x-0"
       )}>
         <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
@@ -638,8 +638,8 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col relative h-full overflow-hidden w-full min-w-0">
         {/* Top Bar */}
-        <div className="h-16 border-b border-zinc-800 flex items-center px-4 md:px-6 justify-between bg-zinc-950/50 backdrop-blur-sm z-10">
-          <div className="flex items-center gap-2 md:gap-3 min-w-0">
+        <div className="h-14 md:h-16 border-b border-zinc-800 flex items-center px-3 md:px-6 justify-between bg-zinc-950/50 backdrop-blur-sm z-10">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
             <button 
               onClick={() => setMobileView('channels')} 
               className="md:hidden p-2 -ml-2 text-zinc-400 hover:text-white shrink-0"
@@ -647,17 +647,18 @@ export default function App() {
               <Menu className="w-5 h-5" />
             </button>
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0 hidden md:block" />
-            <span className="font-medium text-zinc-200 truncate">
-              {activeTarget === 'team' ? 'Team Global Frequency' : `Private Channel: ${users.get(activeTarget)?.name}`}
+            <span className="font-medium text-zinc-200 truncate text-sm md:text-base">
+              {activeTarget === 'team' ? 'Team Global' : users.get(activeTarget)?.name}
+              <span className="hidden md:inline">{activeTarget === 'team' ? ' Frequency' : ''}</span>
             </span>
             {micError && (
-              <span className="ml-2 md:ml-4 text-[10px] md:text-xs font-medium text-red-400 bg-red-400/10 px-2 py-1 rounded border border-red-400/20 shrink-0">
+              <span className="ml-2 md:ml-4 text-[10px] md:text-xs font-medium text-red-400 bg-red-400/10 px-2 py-0.5 md:py-1 rounded border border-red-400/20 shrink-0 truncate">
                 {micError}
               </span>
             )}
           </div>
           
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 ml-2">
             <button
               onClick={() => setForceRelay(!forceRelay)}
               className={cn(
@@ -710,12 +711,12 @@ export default function App() {
             ref={canvasRef}
             width={800}
             height={400}
-            className="w-full max-w-4xl h-64 z-10"
+            className="w-full max-w-4xl h-32 md:h-64 z-10"
           />
         </div>
 
         {/* Bottom Controls */}
-        <div className="p-8 flex flex-col items-center justify-center bg-gradient-to-t from-zinc-950 to-transparent z-10">
+        <div className="p-6 md:p-8 flex flex-col items-center justify-center bg-gradient-to-t from-zinc-950 to-transparent z-10 pb-10 md:pb-8">
           <button
             onMouseDown={() => {
               setIsPTTActive(true);
@@ -779,7 +780,7 @@ export default function App() {
 
       {/* Right Sidebar: Chat */}
       <div className={cn(
-        "bg-zinc-900 border-l border-zinc-800 flex flex-col h-full absolute right-0 md:relative z-50 transition-transform duration-300 w-80 shrink-0",
+        "bg-zinc-900 border-l border-zinc-800 flex flex-col h-full absolute right-0 md:relative z-50 transition-transform duration-300 w-[85vw] sm:w-80 shrink-0",
         mobileView === 'chat' ? "translate-x-0" : "translate-x-full md:translate-x-0"
       )}>
         <div className="h-16 border-b border-zinc-800 flex items-center px-4 justify-between">
