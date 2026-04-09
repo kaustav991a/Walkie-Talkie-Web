@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Mic, MicOff, Users, User, Bell, Settings, Radio, Send, MessageSquare, SignalHigh, SignalMedium, SignalLow, SignalZero } from 'lucide-react';
+import { Mic, MicOff, Users, User, Bell, Settings, Radio, Send, MessageSquare, SignalHigh, SignalMedium, SignalLow, SignalZero, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { WebRTCManager } from './lib/webrtc';
 import { audioEngine } from './lib/audio';
 import { cn } from './lib/utils';
@@ -50,6 +50,7 @@ export default function App() {
   const [forceRelay, setForceRelay] = useState(false);
   const [connectionStates, setConnectionStates] = useState<Record<string, string>>({});
   const [connectionQualities, setConnectionQualities] = useState<Record<string, 'excellent' | 'good' | 'poor' | 'unknown'>>({});
+  const [mobileView, setMobileView] = useState<'channels' | 'ptt' | 'chat'>('ptt');
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -478,32 +479,51 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden relative">
+    <div className="h-screen bg-zinc-950 text-zinc-100 font-sans flex overflow-hidden relative w-full">
+      {/* Mobile Backdrop */}
+      {mobileView !== 'ptt' && (
+        <div 
+          className="md:hidden fixed inset-0 bg-black/60 z-40 backdrop-blur-sm"
+          onClick={() => setMobileView('ptt')}
+        />
+      )}
+
       {/* Audio Unlock Overlay */}
       {!hasInteracted && (
         <div className="absolute inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center cursor-pointer">
-          <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-2xl text-center max-w-sm animate-pulse">
+          <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-2xl text-center max-w-sm animate-pulse mx-4">
             <Radio className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
-            <h2 className="text-xl font-semibold mb-2">Click anywhere to connect</h2>
+            <h2 className="text-xl font-semibold mb-2">Tap anywhere to connect</h2>
             <p className="text-zinc-400 text-sm">Browser policies require interaction before audio can be played.</p>
           </div>
         </div>
       )}
 
       {/* Sidebar: DMs and Team */}
-      <div className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col h-full">
+      <div className={cn(
+        "bg-zinc-900 border-r border-zinc-800 flex flex-col h-full absolute md:relative z-50 transition-transform duration-300 w-72 md:w-64 shrink-0",
+        mobileView === 'channels' ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+      )}>
         <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Radio className="w-5 h-5 text-emerald-500" />
             <span className="font-semibold tracking-tight">Channels</span>
           </div>
-          <button 
-            onClick={requestNotifications}
-            className={cn("p-1.5 rounded-md transition-colors", notificationsEnabled ? "text-emerald-500 bg-emerald-500/10" : "text-zinc-500 hover:bg-zinc-800")}
-            title="Enable Desktop Notifications"
-          >
-            <Bell className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={requestNotifications}
+              className={cn("p-1.5 rounded-md transition-colors", notificationsEnabled ? "text-emerald-500 bg-emerald-500/10" : "text-zinc-500 hover:bg-zinc-800")}
+              title="Enable Desktop Notifications"
+            >
+              <Bell className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={() => setMobileView('ptt')}
+              className="md:hidden p-1.5 text-zinc-400 hover:text-white rounded-md hover:bg-zinc-800"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
@@ -616,23 +636,32 @@ export default function App() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col relative h-full overflow-hidden">
+      <div className="flex-1 flex flex-col relative h-full overflow-hidden w-full min-w-0">
         {/* Top Bar */}
-        <div className="h-16 border-b border-zinc-800 flex items-center px-6 justify-between bg-zinc-950/50 backdrop-blur-sm z-10">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-medium text-zinc-200">
+        <div className="h-16 border-b border-zinc-800 flex items-center px-4 md:px-6 justify-between bg-zinc-950/50 backdrop-blur-sm z-10">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0">
+            <button 
+              onClick={() => setMobileView('channels')} 
+              className="md:hidden p-2 -ml-2 text-zinc-400 hover:text-white shrink-0"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0 hidden md:block" />
+            <span className="font-medium text-zinc-200 truncate">
               {activeTarget === 'team' ? 'Team Global Frequency' : `Private Channel: ${users.get(activeTarget)?.name}`}
             </span>
             {micError && (
-              <span className="ml-4 text-xs font-medium text-red-400 bg-red-400/10 px-2 py-1 rounded border border-red-400/20">
+              <span className="ml-2 md:ml-4 text-[10px] md:text-xs font-medium text-red-400 bg-red-400/10 px-2 py-1 rounded border border-red-400/20 shrink-0">
                 {micError}
               </span>
             )}
+          </div>
+          
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setForceRelay(!forceRelay)}
               className={cn(
-                "ml-4 px-3 py-1 rounded text-xs font-medium border transition-colors",
+                "hidden md:block px-3 py-1 rounded text-xs font-medium border transition-colors",
                 forceRelay 
                   ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30" 
                   : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700"
@@ -641,24 +670,31 @@ export default function App() {
             >
               {forceRelay ? 'Corporate Firewall Mode: ON' : 'Corporate Firewall Mode: OFF'}
             </button>
-          </div>
-          
-          {/* "Tray" Indicator Simulation */}
-          <div className={cn(
-            "px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-colors border",
-            isPTTActive 
-              ? "bg-red-500/10 text-red-500 border-red-500/20" 
-              : Array.from(users.values()).some(u => u.isTalking)
-                ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                : "bg-zinc-800 text-zinc-400 border-zinc-700"
-          )}>
-            {isPTTActive ? (
-              <><Mic className="w-3 h-3" /> Transmitting</>
-            ) : Array.from(users.values()).some(u => u.isTalking) ? (
-              <><Radio className="w-3 h-3" /> Receiving</>
-            ) : (
-              <><MicOff className="w-3 h-3" /> Standby</>
-            )}
+
+            {/* "Tray" Indicator Simulation */}
+            <div className={cn(
+              "px-2 md:px-3 py-1.5 rounded-full text-[10px] md:text-xs font-medium flex items-center gap-1.5 md:gap-2 transition-colors border",
+              isPTTActive 
+                ? "bg-red-500/10 text-red-500 border-red-500/20" 
+                : Array.from(users.values()).some(u => u.isTalking)
+                  ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                  : "bg-zinc-800 text-zinc-400 border-zinc-700"
+            )}>
+              {isPTTActive ? (
+                <><Mic className="w-3 h-3" /> <span className="hidden sm:inline">Transmitting</span></>
+              ) : Array.from(users.values()).some(u => u.isTalking) ? (
+                <><Radio className="w-3 h-3" /> <span className="hidden sm:inline">Receiving</span></>
+              ) : (
+                <><MicOff className="w-3 h-3" /> <span className="hidden sm:inline">Standby</span></>
+              )}
+            </div>
+
+            <button 
+              onClick={() => setMobileView('chat')} 
+              className="md:hidden p-2 -mr-2 text-zinc-400 hover:text-white relative shrink-0"
+            >
+              <MessageSquare className="w-5 h-5" />
+            </button>
           </div>
         </div>
 
@@ -702,31 +738,63 @@ export default function App() {
                 setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
               }
             }}
+            onTouchStart={(e) => {
+              e.preventDefault(); // Prevent scroll/zoom and emulated mouse events
+              setIsPTTActive(true);
+              audioEngine.unlockAll();
+              audioEngine.setLocalMicActive(true);
+              rtcManager?.setLocalMicEnabled(true);
+              setDoc(doc(db, 'users', userId), { isTalking: true, target: activeTarget }, { merge: true });
+            }}
+            onTouchEnd={(e) => {
+              e.preventDefault();
+              setIsPTTActive(false);
+              audioEngine.setLocalMicActive(false);
+              rtcManager?.setLocalMicEnabled(false);
+              setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
+            }}
+            onTouchCancel={() => {
+              setIsPTTActive(false);
+              audioEngine.setLocalMicActive(false);
+              rtcManager?.setLocalMicEnabled(false);
+              setDoc(doc(db, 'users', userId), { isTalking: false, target: activeTarget }, { merge: true });
+            }}
             className={cn(
-              "w-32 h-32 rounded-full flex flex-col items-center justify-center gap-2 transition-all duration-200 shadow-2xl border-4",
+              "w-32 h-32 md:w-40 md:h-40 rounded-full flex flex-col items-center justify-center gap-2 transition-all duration-200 shadow-2xl border-4 select-none touch-none",
               isPTTActive 
                 ? "bg-red-500 border-red-400 scale-95 shadow-red-500/50" 
                 : "bg-zinc-800 border-zinc-700 hover:bg-zinc-700 hover:border-zinc-600 shadow-black/50"
             )}
           >
-            <Mic className={cn("w-10 h-10", isPTTActive ? "text-white" : "text-zinc-400")} />
-            <span className={cn("text-xs font-bold uppercase tracking-widest", isPTTActive ? "text-white" : "text-zinc-500")}>
+            <Mic className={cn("w-10 h-10 md:w-12 md:h-12", isPTTActive ? "text-white" : "text-zinc-400")} />
+            <span className={cn("text-xs md:text-sm font-bold uppercase tracking-widest", isPTTActive ? "text-white" : "text-zinc-500")}>
               {isPTTActive ? 'Live' : 'PTT'}
             </span>
           </button>
-          <p className="mt-6 text-sm text-zinc-500 font-medium tracking-wide">
-            Hold <kbd className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-zinc-300 font-mono text-xs mx-1 shadow-sm">Spacebar</kbd> to talk
+          <p className="mt-6 text-sm text-zinc-500 font-medium tracking-wide text-center">
+            Hold <kbd className="hidden md:inline-block px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-zinc-300 font-mono text-xs mx-1 shadow-sm">Spacebar</kbd> <span className="md:hidden">button</span> to talk
           </p>
         </div>
       </div>
 
       {/* Right Sidebar: Chat */}
-      <div className="w-80 bg-zinc-900 border-l border-zinc-800 flex flex-col h-full">
-        <div className="h-16 border-b border-zinc-800 flex items-center px-4 gap-2">
-          <MessageSquare className="w-5 h-5 text-emerald-500" />
-          <span className="font-semibold tracking-tight">
-            {activeTarget === 'team' ? 'Team Chat' : users.get(activeTarget)?.name || 'Chat'}
-          </span>
+      <div className={cn(
+        "bg-zinc-900 border-l border-zinc-800 flex flex-col h-full absolute right-0 md:relative z-50 transition-transform duration-300 w-80 shrink-0",
+        mobileView === 'chat' ? "translate-x-0" : "translate-x-full md:translate-x-0"
+      )}>
+        <div className="h-16 border-b border-zinc-800 flex items-center px-4 justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <MessageSquare className="w-5 h-5 text-emerald-500 shrink-0" />
+            <span className="font-semibold tracking-tight truncate">
+              {activeTarget === 'team' ? 'Team Chat' : users.get(activeTarget)?.name || 'Chat'}
+            </span>
+          </div>
+          <button 
+            onClick={() => setMobileView('ptt')}
+            className="md:hidden p-1.5 text-zinc-400 hover:text-white rounded-md hover:bg-zinc-800 shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
         
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
