@@ -7,6 +7,7 @@ export class AudioEngine {
   isDucking: boolean = false;
   localSource: MediaStreamAudioSourceNode | null = null;
   localGain: GainNode | null = null;
+  currentSinkId: string = 'default';
 
   isInitialized: boolean = false;
 
@@ -46,6 +47,9 @@ export class AudioEngine {
       
       // Unlock the audio element for future background playback with a silent WAV
       audio.src = silentWav;
+      if (this.currentSinkId !== 'default' && 'setSinkId' in audio) {
+        (audio as any).setSinkId(this.currentSinkId).catch(console.warn);
+      }
       
       // Push to pool first
       this.audioPool.push(audio);
@@ -106,6 +110,9 @@ export class AudioEngine {
         audio = new Audio();
         audio.setAttribute('playsinline', 'true');
         audio.style.display = 'none';
+        if (this.currentSinkId !== 'default' && 'setSinkId' in audio) {
+          (audio as any).setSinkId(this.currentSinkId).catch(console.warn);
+        }
         document.body.appendChild(audio);
         this.audioPool.push(audio);
       }
@@ -199,6 +206,19 @@ export class AudioEngine {
   duckTeam(duck: boolean) {
     this.isDucking = duck;
     this.updateVolumes();
+  }
+
+  async setOutputDevice(deviceId: string) {
+    this.currentSinkId = deviceId;
+    for (const audio of this.audioPool) {
+      if ('setSinkId' in audio) {
+        try {
+          await (audio as any).setSinkId(deviceId);
+        } catch (e) {
+          console.warn("Failed to set sink id on audio element", e);
+        }
+      }
+    }
   }
 
   private updateVolumes() {

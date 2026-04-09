@@ -52,9 +52,38 @@ export default function App() {
   const [connectionQualities, setConnectionQualities] = useState<Record<string, 'excellent' | 'good' | 'poor' | 'unknown'>>({});
   const [mobileView, setMobileView] = useState<'channels' | 'ptt' | 'chat'>('ptt');
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
+  const [showSettings, setShowSettings] = useState(false);
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [audioOutputDevices, setAudioOutputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMic, setSelectedMic] = useState<string>('default');
+  const [selectedSpeaker, setSelectedSpeaker] = useState<string>('default');
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (showSettings) {
+      navigator.mediaDevices.enumerateDevices().then(devices => {
+        setAudioDevices(devices.filter(d => d.kind === 'audioinput'));
+        setAudioOutputDevices(devices.filter(d => d.kind === 'audiooutput'));
+      }).catch(err => console.error("Failed to enumerate devices", err));
+    }
+  }, [showSettings]);
+
+  const handleMicChange = async (deviceId: string) => {
+    setSelectedMic(deviceId);
+    if (rtcManager) {
+      await rtcManager.switchMicrophone(deviceId);
+      if (rtcManager.localStream) {
+        audioEngine.setLocalStream(rtcManager.localStream);
+      }
+    }
+  };
+
+  const handleSpeakerChange = async (deviceId: string) => {
+    setSelectedSpeaker(deviceId);
+    await audioEngine.setOutputDevice(deviceId);
+  };
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -147,7 +176,7 @@ export default function App() {
 
     const init = async () => {
       // 1. Initialize Microphone FIRST
-      const micGranted = await manager.initializeLocalStream();
+      const micGranted = await manager.initializeLocalStream(selectedMic === 'default' ? undefined : selectedMic);
       if (micGranted && manager.localStream) {
         audioEngine.init();
         audioEngine.setLocalStream(manager.localStream);
@@ -629,7 +658,10 @@ export default function App() {
             <div className="font-medium text-sm text-zinc-200 truncate">{username}</div>
             <div className="text-xs text-emerald-500 cursor-pointer hover:underline" onClick={handleLogout}>Logout</div>
           </div>
-          <button className="text-zinc-500 hover:text-zinc-300 transition-colors">
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="text-zinc-500 hover:text-zinc-300 transition-colors p-2"
+          >
             <Settings className="w-4 h-4" />
           </button>
         </div>
@@ -847,6 +879,79 @@ export default function App() {
           </form>
         </div>
       </div>
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Settings className="w-5 h-5 text-emerald-500" />
+                Settings
+              </h2>
+              <button onClick={() => setShowSettings(false)} className="text-zinc-400 hover:text-white p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-2">Microphone (Input)</label>
+                <select 
+                  value={selectedMic}
+                  onChange={(e) => handleMicChange(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="default">System Default</option>
+                  {audioDevices.map(device => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Microphone ${device.deviceId.substring(0, 5)}...`}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-zinc-500 mt-2">
+                  Selecting your Bluetooth headset here will usually force the audio output to route to it as well on mobile devices.
+                </p>
+              </div>
+
+              {audioOutputDevices.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-zinc-300 mb-2">Speaker (Output)</label>
+                  <select 
+                    value={selectedSpeaker}
+                    onChange={(e) => handleSpeakerChange(e.target.value)}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="default">System Default</option>
+                    {audioOutputDevices.map(device => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label || `Speaker ${device.deviceId.substring(0, 5)}...`}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-zinc-500 mt-2">
+                    Note: Direct speaker selection is not supported on all mobile browsers (like iOS Safari).
+                  </p>
+                </div>
+              )}
+              
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-2">Network Settings</label>
+                <label className="flex items-center gap-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700/50 cursor-pointer hover:bg-zinc-800 transition-colors">
+                  <input 
+                    type="checkbox" 
+                    checked={forceRelay}
+                    onChange={(e) => setForceRelay(e.target.checked)}
+                    className="w-4 h-4 rounded border-zinc-600 text-emerald-500 focus:ring-emerald-500/20 bg-zinc-900"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-zinc-200">Corporate Firewall Mode</div>
+                    <div className="text-xs text-zinc-500 mt-0.5">Force audio through secure relay servers (TURN). Use if connections fail.</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

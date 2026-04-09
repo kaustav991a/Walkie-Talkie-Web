@@ -7,6 +7,7 @@ export class WebRTCManager {
   localStream: MediaStream | null = null;
   peer: Peer | null = null;
   calls: Map<string, MediaConnection> = new Map();
+  selectedMicId: string | null = null;
   
   onPeerId: (peerId: string) => void;
   onConnectionStateChange?: (userId: string, state: string) => void;
@@ -39,14 +40,16 @@ export class WebRTCManager {
     const wasMuted = oldStream ? !oldStream.getAudioTracks()[0].enabled : true;
     
     try {
-      const newStream = await navigator.mediaDevices.getUserMedia({ 
+      const constraints: MediaStreamConstraints = { 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          ...(this.selectedMicId ? { deviceId: { exact: this.selectedMicId } } : {})
         }, 
         video: false 
-      });
+      };
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       
       this.localStream = newStream;
       const newAudioTrack = newStream.getAudioTracks()[0];
@@ -70,24 +73,71 @@ export class WebRTCManager {
     }
   }
 
-  async initializeLocalStream() {
+  async initializeLocalStream(micDeviceId?: string) {
     try {
+      if (micDeviceId) {
+        this.selectedMicId = micDeviceId;
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         console.warn("getUserMedia is not supported in this browser.");
         return false;
       }
-      this.localStream = await navigator.mediaDevices.getUserMedia({ 
+      
+      const constraints: MediaStreamConstraints = { 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          ...(this.selectedMicId ? { deviceId: { exact: this.selectedMicId } } : {})
         }, 
         video: false 
-      });
+      };
+      
+      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
       this.setLocalMicEnabled(false);
       return true;
     } catch (err) {
       console.error("Failed to get local stream", err);
+      return false;
+    }
+  }
+
+  async switchMicrophone(deviceId: string) {
+    this.selectedMicId = deviceId;
+    const wasMuted = this.localStream ? !this.localStream.getAudioTracks()[0].enabled : true;
+    
+    try {
+      const constraints: MediaStreamConstraints = { 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          deviceId: { exact: deviceId }
+        }, 
+        video: false 
+      };
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      this.localStream = newStream;
+      const newAudioTrack = newStream.getAudioTracks()[0];
+      newAudioTrack.enabled = !wasMuted;
+
+      // Replace track in all active calls
+      this.calls.forEach(call => {
+        if (call.peerConnection) {
+          const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'audio');
+          if (sender) {
+            sender.replaceTrack(newAudioTrack).catch(e => console.error("Failed to replace track", e));
+          }
+        }
+      });
+
+      if (this.onLocalStreamChange) {
+        this.onLocalStreamChange(newStream);
+      }
+      return true;
+    } catch (e) {
+      console.error("Failed to switch microphone", e);
       return false;
     }
   }
