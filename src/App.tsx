@@ -402,50 +402,86 @@ export default function App() {
 
     const isAnyoneTalking = Array.from(users.values()).some(u => u.isTalking) || isPTTActive;
     
-    // Draw Frequency Bars
-    const barCount = 64; // Number of bars
-    const barWidth = (width / barCount) - 2;
-    let x = 0;
-    
-    // We only use the lower half of the frequencies as they contain most voice data
-    const step = Math.floor((dataArray.length / 2) / barCount);
+    // Background Grid (like the reference image)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for(let i = 0; i < width; i += width/10) { ctx.moveTo(i, 0); ctx.lineTo(i, height); }
+    for(let i = 0; i < height; i += height/6) { ctx.moveTo(0, i); ctx.lineTo(width, i); }
+    ctx.stroke();
+
+    // Center highlight band (like the blue overlay in the image)
+    ctx.fillStyle = 'rgba(125, 211, 252, 0.03)'; 
+    ctx.fillRect(0, height/2 - 40, width, 80);
+    ctx.strokeStyle = 'rgba(125, 211, 252, 0.1)';
+    ctx.beginPath();
+    ctx.moveTo(0, height/2 - 40); ctx.lineTo(width, height/2 - 40);
+    ctx.moveTo(0, height/2 + 40); ctx.lineTo(width, height/2 + 40);
+    ctx.stroke();
+
+    // Determine base colors
+    let r = 100, g = 116, b = 139; // Default Zinc
+    if (isPTTActive) { r = 239; g = 68; b = 68; } // Red
+    else if (isAnyoneTalking) { r = 16; g = 185; b = 129; } // Emerald
+
+    // Draw Digital Frequency Bars
+    const barCount = 180; // High density
+    const barWidth = width / barCount;
+    const step = Math.max(1, Math.floor((dataArray.length * 0.6) / barCount)); // Use lower 60% of frequencies
+
+    // Center bright line
+    ctx.fillStyle = `rgba(255, 255, 255, ${isAnyoneTalking || isPTTActive ? 0.8 : 0.1})`;
+    ctx.shadowBlur = (isAnyoneTalking || isPTTActive) ? 15 : 0;
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 1)`;
+    ctx.fillRect(0, height/2 - 0.5, width, 1);
+    ctx.shadowBlur = 0;
 
     for (let i = 0; i < barCount; i++) {
-      // Average the frequency data for this bar
       let sum = 0;
       for (let j = 0; j < step; j++) {
-        sum += dataArray[(i * step) + j];
+        sum += dataArray[(i * step) + j] || 0;
       }
       const average = sum / step;
       
-      // Normalize to height (average is 0-255)
-      const barHeight = (average / 255) * height * 0.8; // Max 80% height
+      // Add some noise/randomness to make it look like the complex image
+      const noise = Math.random() * 15 - 7.5; 
+      const normalized = Math.max(0, Math.min(1, (average + noise) / 255));
       
-      // Minimum bar height so it looks good when silent
-      const finalHeight = Math.max(barHeight, 4);
+      if (normalized < 0.03) continue;
 
-      // Color gradient based on state
-      if (isPTTActive) {
-        ctx.fillStyle = `rgba(239, 68, 68, ${Math.max(0.3, average / 255)})`; // Red
-        ctx.shadowColor = '#ef4444';
-      } else if (isAnyoneTalking) {
-        ctx.fillStyle = `rgba(16, 185, 129, ${Math.max(0.3, average / 255)})`; // Emerald
-        ctx.shadowColor = '#10b981';
-      } else {
-        ctx.fillStyle = 'rgba(63, 63, 70, 0.5)'; // Zinc-700
-        ctx.shadowColor = 'transparent';
+      const maxBarHeight = height * 0.45; // Max height from center
+      const actualHeight = normalized * maxBarHeight;
+      
+      const x = i * barWidth;
+      const centerY = height / 2;
+
+      // Draw segmented line (digital dots/dashes)
+      const segmentHeight = 2;
+      const gap = 2;
+      const segments = Math.floor(actualHeight / (segmentHeight + gap));
+
+      for(let s = 0; s < segments; s++) {
+        const alpha = 1 - (s / segments); // Fade out
+        const isCenter = s < 3; // Inner segments are bright white
+        
+        if (isCenter) {
+           ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+           ctx.shadowBlur = 8;
+           ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 1)`;
+        } else {
+           // Outer segments take the semantic color
+           ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha * 0.8})`;
+           ctx.shadowBlur = 0;
+        }
+
+        const yOffset = s * (segmentHeight + gap) + 2; 
+        
+        // Randomly skip some segments for that glitchy/sparse look in the image
+        if (Math.random() > 0.15 || isCenter) {
+          ctx.fillRect(x + 0.5, centerY - yOffset - segmentHeight, barWidth - 1, segmentHeight);
+          ctx.fillRect(x + 0.5, centerY + yOffset, barWidth - 1, segmentHeight);
+        }
       }
-      
-      ctx.shadowBlur = (isAnyoneTalking || isPTTActive) ? 10 : 0;
-
-      // Draw rounded bar (centered vertically)
-      const y = (height - finalHeight) / 2;
-      
-      ctx.beginPath();
-      ctx.roundRect(x, y, barWidth, finalHeight, barWidth / 2);
-      ctx.fill();
-
-      x += barWidth + 2;
     }
 
     requestRef.current = requestAnimationFrame(drawWaveform);
