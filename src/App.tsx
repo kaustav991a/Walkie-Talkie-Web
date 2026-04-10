@@ -402,29 +402,51 @@ export default function App() {
 
     const isAnyoneTalking = Array.from(users.values()).some(u => u.isTalking) || isPTTActive;
     
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = isPTTActive ? '#ef4444' : (isAnyoneTalking ? '#10b981' : '#3f3f46');
-    ctx.shadowBlur = isAnyoneTalking ? 15 : 0;
-    ctx.shadowColor = ctx.strokeStyle;
-
-    ctx.beginPath();
-    const sliceWidth = width * 1.0 / dataArray.length;
+    // Draw Frequency Bars
+    const barCount = 64; // Number of bars
+    const barWidth = (width / barCount) - 2;
     let x = 0;
+    
+    // We only use the lower half of the frequencies as they contain most voice data
+    const step = Math.floor((dataArray.length / 2) / barCount);
 
-    for (let i = 0; i < dataArray.length; i++) {
-      const v = dataArray[i] / 128.0;
-      const y = v * height / 2;
-
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
+    for (let i = 0; i < barCount; i++) {
+      // Average the frequency data for this bar
+      let sum = 0;
+      for (let j = 0; j < step; j++) {
+        sum += dataArray[(i * step) + j];
       }
-      x += sliceWidth;
-    }
+      const average = sum / step;
+      
+      // Normalize to height (average is 0-255)
+      const barHeight = (average / 255) * height * 0.8; // Max 80% height
+      
+      // Minimum bar height so it looks good when silent
+      const finalHeight = Math.max(barHeight, 4);
 
-    ctx.lineTo(canvas.width, canvas.height / 2);
-    ctx.stroke();
+      // Color gradient based on state
+      if (isPTTActive) {
+        ctx.fillStyle = `rgba(239, 68, 68, ${Math.max(0.3, average / 255)})`; // Red
+        ctx.shadowColor = '#ef4444';
+      } else if (isAnyoneTalking) {
+        ctx.fillStyle = `rgba(16, 185, 129, ${Math.max(0.3, average / 255)})`; // Emerald
+        ctx.shadowColor = '#10b981';
+      } else {
+        ctx.fillStyle = 'rgba(63, 63, 70, 0.5)'; // Zinc-700
+        ctx.shadowColor = 'transparent';
+      }
+      
+      ctx.shadowBlur = (isAnyoneTalking || isPTTActive) ? 10 : 0;
+
+      // Draw rounded bar (centered vertically)
+      const y = (height - finalHeight) / 2;
+      
+      ctx.beginPath();
+      ctx.roundRect(x, y, barWidth, finalHeight, barWidth / 2);
+      ctx.fill();
+
+      x += barWidth + 2;
+    }
 
     requestRef.current = requestAnimationFrame(drawWaveform);
   }, [users, isPTTActive]);
@@ -786,7 +808,7 @@ export default function App() {
         <div className={cn(
           "bg-zinc-950 md:bg-zinc-900 flex flex-col transition-all duration-300 z-30",
           "absolute inset-0 pb-[72px] md:pb-0 md:inset-auto md:right-0 md:w-80 md:h-full md:border-l md:border-zinc-800 shrink-0",
-          mobileView === 'chat' ? "opacity-100 translate-x-0 md:shadow-2xl" : "opacity-0 translate-x-8 pointer-events-none md:opacity-100 md:translate-x-full"
+          mobileView === 'chat' ? "opacity-100 translate-x-0 md:shadow-2xl md:pointer-events-auto" : "opacity-0 translate-x-8 pointer-events-none md:translate-x-full"
         )}>
           <div className="h-14 md:h-16 border-b border-zinc-800/50 md:border-zinc-800 flex items-center px-4 justify-between shrink-0 bg-zinc-900/50 md:bg-transparent backdrop-blur-md md:backdrop-blur-none">
             <div className="flex items-center gap-2 min-w-0">
