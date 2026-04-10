@@ -545,9 +545,9 @@ export default function App() {
 
       {/* CHANNELS SIDEBAR */}
       <div className={cn(
-        "bg-zinc-950 md:bg-zinc-900 flex flex-col transition-all duration-300 z-20",
+        "bg-zinc-950 md:bg-zinc-900 flex flex-col z-20",
         "absolute inset-0 pb-[72px] md:pb-0 md:relative md:inset-auto md:w-64 md:border-r md:border-zinc-800 shrink-0",
-        mobileView === 'channels' ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-8 pointer-events-none md:opacity-100 md:translate-x-0 md:pointer-events-auto"
+        mobileView === 'channels' ? "opacity-100" : "opacity-0 pointer-events-none md:opacity-100 md:pointer-events-auto"
       )}>
         <div className="h-14 md:h-16 border-b border-zinc-800/50 md:border-zinc-800 flex items-center px-4 justify-between shrink-0 bg-zinc-900/50 md:bg-transparent backdrop-blur-md md:backdrop-blur-none">
           <div className="flex items-center gap-2">
@@ -675,9 +675,8 @@ export default function App() {
 
         {/* MAIN PTT AREA */}
         <div className={cn(
-          "bg-zinc-950 flex flex-col transition-all duration-300 z-10",
-          "absolute inset-0 pb-[72px] md:pb-0 md:relative md:inset-auto md:flex-1 min-w-0",
-          mobileView === 'ptt' ? "opacity-100 scale-100" : "opacity-0 scale-95 pointer-events-none md:opacity-100 md:scale-100 md:pointer-events-auto"
+          "bg-zinc-950 flex flex-col z-10",
+          "absolute inset-0 pb-[72px] md:pb-0 md:relative md:inset-auto md:flex-1 min-w-0"
         )}>
           <div className="h-14 md:h-16 border-b border-zinc-800/50 md:border-zinc-800 flex items-center px-4 md:px-6 justify-between shrink-0 bg-zinc-900/50 md:bg-zinc-950/50 backdrop-blur-md z-20">
             <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
@@ -823,9 +822,9 @@ export default function App() {
 
         {/* CHAT SIDEBAR */}
         <div className={cn(
-          "bg-zinc-950 md:bg-zinc-900 flex flex-col transition-all duration-300 z-40",
+          "bg-zinc-950 md:bg-zinc-900 flex flex-col z-40",
           "absolute inset-0 pb-[72px] md:pb-0 md:left-auto md:right-0 md:w-80 md:h-full md:border-l md:border-zinc-800 shrink-0",
-          mobileView === 'chat' ? "opacity-100 translate-x-0 md:shadow-2xl md:pointer-events-auto" : "opacity-0 translate-x-8 pointer-events-none md:translate-x-full"
+          mobileView === 'chat' ? "opacity-100 md:shadow-2xl md:pointer-events-auto" : "opacity-0 pointer-events-none"
         )}>
           <div className="h-14 md:h-16 border-b border-zinc-800/50 md:border-zinc-800 flex items-center px-4 justify-between shrink-0 bg-zinc-900/50 md:bg-transparent backdrop-blur-md md:backdrop-blur-none">
             <div className="flex items-center gap-2 min-w-0">
