@@ -631,6 +631,23 @@ export default function App() {
                           {(!connectionQualities[user.id] || connectionQualities[user.id] === 'unknown') && <SignalZero className="w-4 h-4 text-zinc-600" />}
                         </div>
                       )}
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (rtcManager && user.peerId) {
+                            rtcManager.removePeerConnection(user.id);
+                            setTimeout(() => rtcManager.connectToPeer(user.id, user.peerId!), 500);
+                          }
+                        }}
+                        className={cn(
+                          "w-2.5 h-2.5 rounded-full cursor-pointer hover:scale-150 transition-transform",
+                          connectionStates[user.id] === 'connected' ? "bg-emerald-500" :
+                          connectionStates[user.id] === 'connecting' ? "bg-yellow-500 animate-pulse" :
+                          connectionStates[user.id] === 'disconnected' ? "bg-red-500" :
+                          connectionStates[user.id] === 'failed' ? "bg-red-600" : "bg-zinc-600"
+                        )} 
+                        title={`Connection: ${connectionStates[user.id] || 'connecting'}. Click to force reconnect.`} 
+                      />
                     </div>
                   </div>
                   <div className="text-sm text-zinc-500 truncate">
@@ -806,8 +823,8 @@ export default function App() {
 
         {/* CHAT SIDEBAR */}
         <div className={cn(
-          "bg-zinc-950 md:bg-zinc-900 flex flex-col transition-all duration-300 z-30",
-          "absolute inset-0 pb-[72px] md:pb-0 md:inset-auto md:right-0 md:w-80 md:h-full md:border-l md:border-zinc-800 shrink-0",
+          "bg-zinc-950 md:bg-zinc-900 flex flex-col transition-all duration-300 z-40",
+          "absolute inset-0 pb-[72px] md:pb-0 md:left-auto md:right-0 md:w-80 md:h-full md:border-l md:border-zinc-800 shrink-0",
           mobileView === 'chat' ? "opacity-100 translate-x-0 md:shadow-2xl md:pointer-events-auto" : "opacity-0 translate-x-8 pointer-events-none md:translate-x-full"
         )}>
           <div className="h-14 md:h-16 border-b border-zinc-800/50 md:border-zinc-800 flex items-center px-4 justify-between shrink-0 bg-zinc-900/50 md:bg-transparent backdrop-blur-md md:backdrop-blur-none">
